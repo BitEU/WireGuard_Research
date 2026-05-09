@@ -81,21 +81,21 @@ obfuscation tool used in front of WireGuard.
 \end{abstract}
 
 \begin{IEEEkeywords}
-WireGuard, VPN, deep packet inspection, udp2raw, traffic obfuscation,
-flow fingerprinting, active probing
+WireGuard, udp2raw, deep packet inspection, traffic obfuscation,
+flow fingerprinting, active probing, censorship circumvention
 \end{IEEEkeywords}
 
 \section{Introduction}
 
-For VPN users in network environments that perform deep packet inspection,
-two distinct properties are at stake: confidentiality of the traffic
-carried, and unobservability of the VPN's own existence. The censorship-
-circumvention literature, beginning at least with the Tor pluggable
-transports work and continuing through Frolov and Wustrow's analysis of
-TLS-based circumvention~\cite{frolov2020probe}, treats these as separate
-problems requiring separate mechanisms. WireGuard~\cite{donenfeld2017},
-designed by J.\ A.\ Donenfeld and shipped as the default VPN in many
-recent distributions, addresses confidentiality with a small modern
+For users in network environments that perform deep packet inspection,
+two distinct goals matter: confidentiality of the traffic carried, and
+unobservability of the VPN's own existence. The
+censorship-circumvention literature has long treated these as separate
+problems requiring separate mechanisms; Frolov and
+Wustrow~\cite{frolov2020probe} discuss the distinction in the context
+of TLS-based circumvention. WireGuard~\cite{donenfeld2017}, designed
+by J.\ A.\ Donenfeld and shipped as the default VPN in many recent
+distributions, addresses confidentiality with a small modern
 cryptographic stack and explicitly leaves unobservability out of
 scope~\cite{wgknown}. The on-the-wire framing reflects that design
 choice: four message types with a constant four-byte header and three
@@ -116,15 +116,25 @@ most-downloaded tool whose explicit purpose is wrapping UDP in a
 TCP-shaped tunnel: GitHub release statistics~\cite{ghapi_udp2raw}
 record approximately $259{,}000$ binary downloads across 33 releases of
 the primary repository as of May~2026, with a further $41{,}000$ downloads
-of the multiplatform fork. udp2raw is also a documented target of
-active blocking by the GFW~\cite{wu2023gfw} and Iranian
-DPI~\cite{tegant_amnezia_2024}. Yet, unlike OpenVPN~\cite{xue2022openvpn},
-Shadowsocks~\cite{alice2020shadowsocks}, or Tor pluggable transports,
-udp2raw has --- to the best of our knowledge, and we welcome correction
---- received no peer-reviewed security analysis. Public mentions are
-limited to the WireGuard project's ``Known Limitations''
-page~\cite{wgknown} and operational reports from the
-GFW Report blog and the Amnezia issue tracker.
+of the multiplatform fork. udp2raw is, by user report, subject to active filtering by
+state-level DPI: a 2024 upstream issue documents an ISP that began
+blocking all of its FakeTCP, ICMP, and UDP modes within seconds of the
+faketcp handshake completing~\cite{udp2raw_issue505}, and the
+canonical net4people thread on Iran's DPI describes broad UDP-tunnel
+filtering of which udp2raw is a typical target~\cite{net4people_iran253}.
+Wu~\textit{et~al.}'s reverse-engineering of the GFW's
+late-2021 entropy-and-popcount filter~\cite{wu2023gfw} would
+additionally fire on udp2raw's encrypted payload bytes in any of its
+modes.\footnote{We cite the udp2raw issue tracker and the net4people
+thread as gray-literature evidence of operational deployment and
+blocking; they are not peer-reviewed sources and we treat them as
+supporting context rather than primary measurement.} Yet, unlike OpenVPN~\cite{xue2022openvpn} and
+Shadowsocks~\cite{alice2020shadowsocks}, udp2raw has --- to the best
+of our knowledge, and we welcome correction --- received no
+peer-reviewed security analysis. Public mentions are limited to the
+WireGuard project's ``Known Limitations'' page~\cite{wgknown} and
+operational reports on issue trackers and circumvention-research
+blogs.
 
 This paper closes that gap with two elementary, easy-to-reproduce attacks
 and a clean lab evaluation:
@@ -292,13 +302,16 @@ is not a contribution but is documented for reproducibility.
 
 All scripts and configurations are bundled in the project repository.
 
-\section{The trivial passive fingerprint (motivation only)}
+\section{Baseline: byte-level WireGuard fingerprint}
 \label{sec:trivial-passive}
 
-We re-derived the well-known WireGuard byte-and-length fingerprint in a
-$\approx$25-line Python predicate (Listing~\ref{lst:classify}) and a
-companion Scapy sniffer. This is not a contribution; it is the baseline
-that justifies the obfuscation problem.
+We implement the byte-and-length classifier described in Donenfeld's
+NDSS'17 talk and reported in production use by
+Wu~\textit{et~al.}~\cite{wu2023gfw} as a $\approx$25-line Python
+predicate (Listing~\ref{lst:classify}) with a companion Scapy sniffer.
+This baseline establishes the comparison floor for the rest of the
+paper: any obfuscation deployment must defeat at least this classifier
+to be considered useful.
 
 \begin{codelisting}[t]
 \caption{The complete WireGuard fingerprint predicate.}
@@ -389,15 +402,15 @@ udp2raw answers none.
 \subsection{Implementation}
 
 We implemented the prober in $\sim$140 lines of Python using
-Scapy~\cite{scapy} (Listing~\ref{lst:probe}, abbreviated). It runs in a
-single process, sends the five probes sequentially, classifies the
+Scapy~\cite{scapy}; the verdict logic is abridged in
+Listing~\ref{lst:probe}, with the full source in
+\texttt{novel/active\_probe.py} in the project repository. It runs in
+a single process, sends the five probes sequentially, classifies the
 result, and emits a verdict label along with timing detail to a
-timestamped evidence file. Evidence files are reproduced verbatim in the
-project repository.
+timestamped evidence file.
 
 \begin{codelisting}[t]
-\caption{Active prober verdict logic (abridged; full source in
-\texttt{novel/active\_probe.py}).}
+\caption{Active prober verdict logic, abridged.}
 \label{lst:probe}
 \begin{lstlisting}
 def classify(results):
@@ -440,11 +453,11 @@ verdict held across 5/5 repeated trials).}
 \toprule
 Probe & TCP/22 (real SSH) & TCP/4096 (udp2raw) & TCP/9999 (closed) \\
 \midrule
-P1 \textemdash{} SYN                 & SYN-ACK in 181\,ms & SYN-ACK in 163\,ms & no response \\
-P2 \textemdash{} SYN + 32\,B payload & SYN-ACK + 2-byte echo & \emph{silent} & no response \\
-P3 \textemdash{} bogus-seq ACK       & RST in 81\,ms      & RST in 91\,ms      & no RST \\
-P4 \textemdash{} SYN with WS=14      & SYN-ACK            & \emph{silent}      & no response \\
-P5 \textemdash{} FIN to unopened     & RST                & \emph{silent}      & no response \\
+P1 --- SYN                  & SYN-ACK in 181\,ms & SYN-ACK in 163\,ms & no response \\
+P2 --- SYN + 32\,B payload  & SYN-ACK + 2-byte echo & \emph{silent} & no response \\
+P3 --- bogus-seq ACK        & RST in 81\,ms      & RST in 91\,ms      & no RST \\
+P4 --- SYN with WS=14       & SYN-ACK            & \emph{silent}      & no response \\
+P5 --- FIN to unopened      & RST                & \emph{silent}      & no response \\
 \midrule
 Total wall-clock                     & 0.5\,s             & 8.5\,s             & 15.5\,s \\
 Verdict                              & \texttt{REAL\_TCP} & \texttt{UDP2RAW\_FAKETCP\_SUSPECTED} & \texttt{UNREACHABLE\_OR\_FILTERED} \\
@@ -560,9 +573,30 @@ provide the wrong negative).
 
 \subsection{Results}
 
-The class means of the two headline features (Table~\ref{tab:means}) show
-a separation of approximately 29$\times$ in \texttt{bulk\_fraction} and
-4$\times$ in \texttt{ack60\_fraction}.
+The class means of the two headline features (Table~\ref{tab:means})
+yield Cohen's $d$ effect sizes of $3.83$ for \texttt{bulk\_fraction}
+and $1.27$ for \texttt{ack60\_fraction}; for reference,
+$d \geq 0.8$ is conventionally a ``large'' effect.
+Figure~\ref{fig:scatter} plots all 1082~flows in the two-feature space.
+Every WireGuard flow has \texttt{bulk\_fraction}~$\geq 0.32$;
+only $4$ of $1058$ non-VPN flows ($0.38\%$) fall in the joint region
+\texttt{(bulk\_fraction~$\geq 0.2$, ack60\_fraction~$\geq 0.15$)}.
+The two clusters of WG flows visible in the scatter correspond to
+\texttt{wg-direct} (UDP, no TCP ACKs, hence $\text{ack60} = 0$) and
+\texttt{wg-obfuscated} (faketcp's $1{:}1$ ACK ratio, hence
+$\text{ack60} \approx 0.33{-}0.50$).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.92\columnwidth]{scatter.pdf}
+\caption{All $1082$ flows in the two-feature space. WireGuard flows
+($n=24$, orange) cluster in two sub-regions corresponding to the
+\texttt{wg-direct} and \texttt{wg-obfuscated} configurations; non-VPN
+flows ($n=1058$, grey) cluster near \texttt{bulk\_fraction}$=0$.
+Dotted lines mark the $(0.2, 0.15)$ corner: $24/24$ WG flows are inside
+it, $1054/1058$ non-VPN flows are outside it.}
+\label{fig:scatter}
+\end{figure}
 
 \begin{table}[t]
 \centering
@@ -608,13 +642,15 @@ LR, 8 features  & 0.9787 & 0.511 & 1.000 & 0.676 & 0.999 \\
 
 The two-feature Random Forest is the headline result: 99.9\% accuracy with
 \emph{zero false positives} on 1058 background flows, and 23/24 WG flows
-correctly classified at AUC=1.000. Adding the six additional features
-slightly degrades RF performance (recall drops from 0.958 to 0.917),
-suggesting the additional features add noise without separating signal.
-Logistic regression catches every WG flow but pays for it with
-$\sim$3\% false-positive rate, consistent with a linear boundary on the
-two-feature space being not quite tight enough to exclude the most
-keepalive-like background flows.
+correctly classified at AUC=1.000. The eight-feature variant performs
+comparably (recall 0.917 vs.\ 0.958, a one-flow difference within
+cross-validation variance) but offers no improvement, consistent with
+the additional features adding variance without adding signal beyond
+what \texttt{bulk\_fraction} and \texttt{ack60\_fraction} already
+provide. Logistic regression catches every WG flow but pays for it
+with a $\sim$3\% false-positive rate, consistent with a linear
+decision boundary on the two-feature space being not quite tight
+enough to exclude the most keepalive-like background flows.
 
 \subsection{Why the two-feature model wins}
 
@@ -640,24 +676,47 @@ mechanically grounded in WireGuard's MTU-padding habit and udp2raw's
 they are consequences of the protocols' implementations, not of the
 specific traffic carried.
 
-\subsection{Limitations and ablation discussion of C2}
+\subsection{Limitations and proposed defence}
 
-Our positive class is small ($n=24$) by ML standards, but the variance of
-the two key features across captures is unusually low: the six trial
-captures of \texttt{wg-direct} produced \texttt{dominant\_size\_fraction}
-values of $\{0.805, 0.805, 0.804, 0.789, 0.805, 0.799\}$ and
-\texttt{bulk\_fraction} values of $\{0.821, 0.821, 0.820, 0.808, 0.821,
-0.815\}$, with ranges of $0.016$ and $0.013$ respectively. This
-reproducibility, together with AUC=1.000, suggests a deterministic
-structural fingerprint rather than a small-sample fluke.
+\textbf{Sample size.} Our positive class is small ($n=24$) by ML
+standards. Two observations argue that this is less limiting than the
+absolute count suggests: first, the variance of the two key features
+across captures is unusually low (the six trial captures of
+\texttt{wg-direct} produced \texttt{dominant\_size\_fraction} values
+$\{0.805, 0.805, 0.804, 0.789, 0.805, 0.799\}$ and
+\texttt{bulk\_fraction} values $\{0.821, 0.821, 0.820, 0.808, 0.821,
+0.815\}$, with ranges of $0.016$ and $0.013$ respectively); second,
+the features are mechanically grounded in protocol implementation
+rather than statistically engineered, so their values are not
+contingent on the specific traffic carried.
 
-A natural \emph{defence} against the C2 classifier is to disable bulk
-padding: reduce the WireGuard MTU so that no packet is bulk-class, and
-introduce delayed ACK in the udp2raw shim so the ACK fraction approaches
-0.33 rather than 0.5. We did not implement this defence in the present
-work; it would require a patch to udp2raw and is logged as future work.
-We expect that even with the defence in place, additional features (e.g.\
-the precise distribution of small-packet sizes) would continue to leak.
+\textbf{Single network path.} All WireGuard captures originated from a
+single Kali client behind VirtualBox NAT, terminating at a single OCI
+server. We did not test from multiple ASes, multiple operating systems,
+or behind different middlebox classes. We expect the bulk-fraction
+signal to survive these changes (it depends on the WireGuard MTU, not
+the path) but the ACK-ratio signal could weaken on paths where a
+network device coalesces or splits TCP segments.
+
+\textbf{Single workload.} The captures are dominated by browsing-shaped
+traffic generated by the system's own DNS resolution, ICMP probes, and
+\texttt{curl}. We did not capture WireGuard tunnels carrying
+streaming video, BitTorrent, or interactive shell traffic, all of
+which produce different packet-size distributions. The
+\texttt{bulk\_fraction} signal should remain intact for any
+non-trivial bulk transfer, but extremely interactive workloads
+(SSH-only, low-bandwidth gaming) may drop bulk-fraction enough to
+weaken the classifier.
+
+\textbf{Proposed defence.} A patch to udp2raw could plausibly close C2:
+(a) introduce delayed-ACK behaviour so the faketcp shim emits roughly
+one 60-byte ACK per two data segments rather than one-per-one,
+collapsing \texttt{ack60\_fraction} toward $0.33$; and (b) recommend
+that users set \texttt{MTU=1199} on the wg interface so no packet
+crosses the 1200-byte bulk threshold. Neither change is implemented
+here. We expect that even with both in place, residual signal in the
+small-packet size distribution would continue to leak; quantifying that
+residual is future work.
 
 \section{Related work}
 \label{sec:related}
@@ -706,22 +765,26 @@ than statistically engineered, and the resulting classifier is small
 enough to read.
 
 \textbf{WireGuard cryptography and formal verification.}
-Dowling~\textit{et~al.}~\cite{dowling2018crypto} and a more recent
-formal-methods analysis (USENIX Security~'25, in submission/published)
-establish WireGuard's cryptographic correctness. Our work is orthogonal:
-it concerns observability of the protocol's flow, not breakability of its
-cryptography.
+Dowling~\textit{et~al.}~\cite{dowling2018crypto} (ACNS~2018) prove
+session-key secrecy in the WireGuard handshake, and Lafourcade
+\textit{et~al.}~\cite{lafourcade2025wireguard} (USENIX Security~2025)
+extend that analysis to a post-quantum hybrid construction. Our work is
+orthogonal: it concerns observability of the protocol's flow, not
+breakability of its cryptography.
 
 \textbf{Other obfuscation tools we did not study.}
-AmneziaWG, swgp-go, wstunnel, and Cloak are alternative obfuscation
-shims for WireGuard, each with its own design. We constrained our scope
-to udp2raw because (a) it is by far the most-deployed of the set
-(${\sim}$8.5k stars), (b) it is the only one with no academic analysis at
-all, and (c) AmneziaWG~v2 in particular is documented to be a moving
-target, with the v2 release in late 2025 introducing per-direction
-ranged-header obfuscation that would invalidate any static feature
-study published before its stabilisation. A comparative measurement
-across the obfuscation ecosystem is logged as future work.
+AmneziaWG~\cite{amneziawg} and swgp-go are not directly comparable to
+udp2raw: they modify WireGuard's own framing rather than wrap it in a
+generic UDP-to-something tunnel. wstunnel and Cloak are comparable in
+shape but considerably less deployed in front of WireGuard
+specifically. We constrained our evaluation to udp2raw because (a) it
+is, to our knowledge, the only tool in the generic-shim category with
+no peer-reviewed security analysis, and (b) AmneziaWG~v2 in particular
+is documented to be a moving target, with the v2 release in late~2025
+introducing per-direction ranged-header obfuscation that would
+invalidate any static feature study published before its
+stabilisation. Comparative measurement across the WireGuard
+obfuscation ecosystem is logged as future work.
 
 \section{Limitations and future work}
 \label{sec:limits}
@@ -770,10 +833,10 @@ recognise.
 For the practitioner deploying WireGuard for confidentiality on a trusted
 network, this paper changes nothing. For the user behind a censorious
 network who has installed udp2raw because the WireGuard byte-fingerprint
-is being blocked, the paper documents that udp2raw alone is not sufficient
-to render the tunnel passively or actively unobservable. We hope it is
-useful as a baseline against which improved designs --- including the
-delayed-ACK and MTU-cap defence we sketch above --- can be evaluated.
+is being blocked, this paper documents that udp2raw alone is not sufficient
+to render the tunnel passively or actively unobservable. It serves as a
+baseline against which improved designs --- including the delayed-ACK and
+MTU-cap defence sketched above --- can be evaluated.
 
 All scripts, datasets, configurations, and evidence files used in this
 paper are available in the project repository.
@@ -833,14 +896,22 @@ Detection Using Wavelet Features and Machine Learning,'' arXiv:2502.13804,
 \bibitem{dowling2018crypto} B. Dowling, P. Rösler, J. Schwenk,
 ``A Cryptographic Analysis of the WireGuard Protocol,'' \textit{ACNS 2018}.
 
+\bibitem{lafourcade2025wireguard} P. Lafourcade, D. Mahmoud, S. Ruhault,
+A. R. Taleb, ``A Tale of Two Worlds: A Formal Story of WireGuard
+Hybridization,'' \textit{USENIX Security 2025},
+\url{https://www.usenix.org/conference/usenixsecurity25/presentation/lafourcade}.
+
 \bibitem{draper2016iscx} G. Draper-Gil, A. H. Lashkari, M. S. I. Mamun,
 A. A. Ghorbani, ``Characterization of Encrypted and VPN Traffic using
 Time-related Features,'' \textit{ICISSP 2016}. Dataset: ISCXVPN2016.
 
-\bibitem{tegant_amnezia_2024} ``Iran's escalation of VPN-blocking
-campaigns,'' Tegant blog and Amnezia issue tracker, 2024 (gray-literature
-operational reports cited as evidence of deployment, not as primary
-academic source).
+\bibitem{udp2raw_issue505} ``Recently my ISP has filtered all the
+udp2raw modes,'' wangyu-/udp2raw GitHub issue \#505, January 2024,
+\url{https://github.com/wangyu-/udp2raw/issues/505}.
+
+\bibitem{net4people_iran253} ``A report on Iran's GFW,''
+net4people/bbs GitHub thread \#253, May 2023,
+\url{https://github.com/net4people/bbs/issues/253}.
 
 \bibitem{scapy} P. Biondi and the Scapy community, ``Scapy: Packet
 crafting for Python,'' \url{https://scapy.net}.

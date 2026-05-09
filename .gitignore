@@ -5,3 +5,4 @@ latex-paper/*
 !latex-paper/IEEEtran.cls
 !latex-paper/report.tex
 /ISCXVPN2016/*
+~$*.pptx

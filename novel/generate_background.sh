@@ -22,7 +22,7 @@ timeout "${DURATION}" tcpdump -i "${IFACE}" -w "${PCAP}" "tcp port 443" >/dev/nu
 TCPDUMP_PID=$!
 sleep 1
 
-# Sustained downloads from a few large-asset sites — keeps each flow alive
+# Sustained downloads from a few large-asset sites  keeps each flow alive
 # >>5s so the feature extractor accepts them. Background loop runs in
 # parallel against multiple sites.
 URLS=(

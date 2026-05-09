@@ -4,7 +4,7 @@ set -euo pipefail
 if [ $# -lt 2 ]; then
   echo "usage: $0 <pcap_dir> <label> [output_csv] [max_files]"
   echo "  recursively finds .pcap/.pcapng under <pcap_dir>, samples up to"
-  echo "  max_files (default 30, sorted by size ascending — small first)"
+  echo "  max_files (default 30, sorted by size ascending  small first)"
   echo "  and extracts features tagging each flow with <label>."
   exit 1
 fi

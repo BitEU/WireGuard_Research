@@ -51,9 +51,9 @@ You need:
 
 In the OCI console, open ingress rules on the subnet's default security list:
 
-* `UDP 51820` from `0.0.0.0/0` — bare WireGuard
-* `TCP 4096`  from `0.0.0.0/0` — udp2raw faketcp
-* `TCP 22`    from your IP (or anywhere) — SSH
+* `UDP 51820` from `0.0.0.0/0`  bare WireGuard
+* `TCP 4096`  from `0.0.0.0/0`  udp2raw faketcp
+* `TCP 22`    from your IP (or anywhere)  SSH
 
 ### 2. Install the server
 
@@ -89,7 +89,7 @@ plus drops in two configs: `wg-direct` (bare) and `wg-obfuscated` (via udp2raw).
 
 In Kali, three steps for the full paper reproduction.
 
-### Step 1 — Trivial passive fingerprint (Section 4)
+### Step 1  Trivial passive fingerprint (Section 4)
 
 Show that bare WireGuard is detected, and that udp2raw hides it from the
 byte-level classifier.
@@ -106,7 +106,7 @@ sudo wg-quick down wg-obfuscated
 
 Outputs land in `evidence/<timestamp>_*.{pcap,txt}`.
 
-### Step 2 — Active prober (Contribution 1)
+### Step 2  Active prober (Contribution 1)
 
 ```bash
 sudo python3 /media/sf_Git/novel/active_probe.py <SERVER_IP> 4096   # udp2raw
@@ -117,7 +117,7 @@ sudo python3 /media/sf_Git/novel/active_probe.py <SERVER_IP> 9999   # closed
 Each emits a verdict: `UDP2RAW_FAKETCP_SUSPECTED`, `REAL_TCP`, or
 `UNREACHABLE_OR_FILTERED`.
 
-### Step 3 — Flow-feature classifier (Contribution 2)
+### Step 3  Flow-feature classifier (Contribution 2)
 
 Capture WireGuard samples (90s each, with two tunnel modes, with six trials):
 
@@ -190,10 +190,37 @@ OCI ingress rules and the VM itself are not touched; remove them manually.
 
 ---
 
+## Building the report PDF
+
+Or, with `latexmk` (cleaner; runs only as many passes as needed):
+
+```powershell
+cd latex-paper
+latexmk -pdf -halt-on-error report.tex
+```
+
+Output is `latex-paper/report.pdf`. To clean intermediate files: `latexmk -C`.
+
+---
+
+## Building the slides
+
+The deck is a generated artifact, not hand-edited. Regenerate after any
+change to `master_set/`:
+
+```powershell
+python -m pip install python-pptx
+python slides\build_slides.py
+```
+
+Output is `slides/WireGuard-udp2raw-detection.pptx`.
+
+---
+
 ## Reading order if you want to understand the project
 
-1. `latex-paper/report.tex` — the writeup.
-2. `dpi-baseline/wg_classify.py` — the 25-line WireGuard detector.
-3. `novel/active_probe.py` — Contribution 1.
-4. `novel/flow_features.py` and `novel/train_classifier.py` — Contribution 2.
-5. `evidence/` — every number in the paper has a timestamped artifact here.
+1. `latex-paper/report.tex`  the writeup.
+2. `dpi-baseline/wg_classify.py`  the 25-line WireGuard detector.
+3. `novel/active_probe.py`  Contribution 1.
+4. `novel/flow_features.py` and `novel/train_classifier.py`  Contribution 2.
+5. `evidence/`  every number in the paper has a timestamped artifact here.

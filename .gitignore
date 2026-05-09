@@ -1,3 +1,6 @@
-/memory
-/.claude
+\memory
+\.claude
 *pycache*
+latex-paper/*
+!latex-paper/IEEEtran.cls
+!latex-paper/report.tex

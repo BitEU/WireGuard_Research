@@ -1,0 +1,4 @@
+label,proto,n_packets,duration_s,len_mean,len_stdev,len_entropy,n_unique_sizes,dominant_size,dominant_size_fraction,top3_size_fraction,bulk_fraction,ack60_fraction,ack_to_data_ratio,iat_mean,iat_stdev,rate_pps,flow_key
+wg-udp2raw,tcp,24,7.2,599,619.6,1.325,3,60,0.5,1.0,0.417,0.5,1.0,0.3131,0.374,3.33,tcp:10.66.66.2:29508<->158.101.122.42:4096
+wg-udp2raw,tcp,104,79.3,643.5,611.1,2.813,15,60,0.346,0.721,0.433,0.346,0.529,0.7699,3.1878,1.31,tcp:10.0.2.15:63419<->158.101.122.42:4096
+wg-udp2raw,tcp,241,59.29,834.8,603.8,1.877,10,60,0.34,0.959,0.618,0.34,0.516,0.247,0.319,4.06,tcp:10.0.2.15:22349<->158.101.122.42:4096

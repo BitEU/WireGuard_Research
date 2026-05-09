@@ -1,0 +1,15 @@
+# active_probe.py at 2026-05-09T12:35:41
+# target: 158.101.122.42:4096
+# source port: 56556
+# evidence: /media/sf_Git/evidence/20260509-123541_active-probe_158.101.122.42_4096.txt
+  [  163ms] {'probe': 'syn', 'outcome': 'syn_ack', 'rtt_ms': 163, 'ttl': 64, 'win': 65535, 'options': [('MSS', 1460)]}
+  [ 3221ms] {'probe': 'syn_with_payload', 'outcome': 'no_response'}
+  [ 3322ms] {'probe': 'bogus_ack', 'outcome': 'rst', 'rtt_ms': 91}
+  [ 6401ms] {'probe': 'wscale', 'outcome': 'no_response'}
+  [ 8501ms] {'probe': 'fin_to_unopened', 'outcome': 'no_response'}
+
+=== verdict: UDP2RAW_FAKETCP_SUSPECTED ===
+  reason: 3/3 follow-up probes silent
+  total time: 8503 ms
+
+# saved: /media/sf_Git/evidence/20260509-123541_active-probe_158.101.122.42_4096.txt

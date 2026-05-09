@@ -1,0 +1,9 @@
+# wg_dpi.py run at 2026-05-09T12:34:08
+# source: pcap=/media/sf_Git/evidence/20260509-123342_udp2raw.pcap
+# bpf: udp
+# evidence: /media/sf_Git/evidence/20260509-123408_udp2raw-pcap.txt
+
+=== Summary ===
+No WireGuard traffic detected.
+
+# saved: /media/sf_Git/evidence/20260509-123408_udp2raw-pcap.txt

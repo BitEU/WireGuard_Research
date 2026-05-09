@@ -1,0 +1,2 @@
+label,proto,n_packets,duration_s,len_mean,len_stdev,len_entropy,n_unique_sizes,dominant_size,dominant_size_fraction,top3_size_fraction,bulk_fraction,ack60_fraction,ack_to_data_ratio,iat_mean,iat_stdev,rate_pps,flow_key
+wg-direct,udp,255,86.96,1169.6,466.6,1.293,16,1386,0.804,0.918,0.82,0.0,0.0,0.3424,0.1864,2.93,udp:10.0.2.15:50783<->158.101.122.42:51820

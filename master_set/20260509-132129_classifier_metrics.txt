@@ -1,0 +1,36 @@
+# classifier evaluation, 20260509-132129
+# flows: 1082 (24 WG, 1058 non-WG)
+# features used: bulk_fraction, ack60_fraction, len_entropy, dominant_size_fraction, top3_size_fraction, ack_to_data_ratio, n_unique_sizes, rate_pps
+# CV: 5-fold stratified
+
+=== RandomForest ===
+  accuracy:  0.9982
+  precision: 1.0000
+  recall:    0.9167
+  f1:        0.9565
+  roc_auc:   1.0000
+  confusion (rows=true, cols=pred):
+            pred=non-WG  pred=WG
+  true=non-WG     1058         0
+  true=WG            2        22
+
+=== LogisticRegression ===
+  accuracy:  0.9787
+  precision: 0.5106
+  recall:    1.0000
+  f1:        0.6761
+  roc_auc:   0.9995
+  confusion (rows=true, cols=pred):
+            pred=non-WG  pred=WG
+  true=non-WG     1035        23
+  true=WG            0        24
+
+=== per-feature class means ===
+  bulk_fraction              WG: 0.553±0.186   non-WG: 0.019±0.066
+  ack60_fraction             WG: 0.295±0.187   non-WG: 0.069±0.169
+  len_entropy                WG: 1.935±0.820   non-WG: 1.233±1.422
+  dominant_size_fraction     WG: 0.496±0.192   non-WG: 0.710±0.304
+  top3_size_fraction         WG: 0.877±0.150   non-WG: 0.871±0.186
+  ack_to_data_ratio          WG: 0.508±0.362   non-WG: 0.413±2.900
+  n_unique_sizes             WG: 13.208±8.485   non-WG: 11.164±39.806
+  rate_pps                   WG: 3.234±0.904   non-WG: 3.371±30.272

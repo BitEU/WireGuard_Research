@@ -1,0 +1,15 @@
+# active_probe.py at 2026-05-09T12:35:52
+# target: 158.101.122.42:9999
+# source port: 40111
+# evidence: /media/sf_Git/evidence/20260509-123552_active-probe_158.101.122.42_9999.txt
+  [ 3128ms] {'probe': 'syn', 'outcome': 'no_response', 'rtt_ms': 3128}
+  [ 6225ms] {'probe': 'syn_with_payload', 'outcome': 'no_response'}
+  [10332ms] {'probe': 'bogus_ack', 'outcome': 'no_rst', 'rtt_ms': 4106}
+  [13432ms] {'probe': 'wscale', 'outcome': 'no_response'}
+  [15504ms] {'probe': 'fin_to_unopened', 'outcome': 'no_response'}
+
+=== verdict: UNREACHABLE_OR_FILTERED ===
+  reason: no SYN-ACK and no RST on initial probe
+  total time: 15505 ms
+
+# saved: /media/sf_Git/evidence/20260509-123552_active-probe_158.101.122.42_9999.txt

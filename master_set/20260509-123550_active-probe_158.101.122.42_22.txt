@@ -1,0 +1,15 @@
+# active_probe.py at 2026-05-09T12:35:50
+# target: 158.101.122.42:22
+# source port: 50623
+# evidence: /media/sf_Git/evidence/20260509-123550_active-probe_158.101.122.42_22.txt
+  [  181ms] {'probe': 'syn', 'outcome': 'syn_ack', 'rtt_ms': 181, 'ttl': 64, 'win': 65535, 'options': [('MSS', 1460)]}
+  [  261ms] {'probe': 'syn_with_payload', 'outcome': 'response', 'resp_flags': 18, 'resp_payload_len': 2}
+  [  344ms] {'probe': 'bogus_ack', 'outcome': 'rst', 'rtt_ms': 81}
+  [  429ms] {'probe': 'wscale', 'outcome': 'response', 'options': [('MSS', 1460)], 'wscale_returned': None}
+  [  517ms] {'probe': 'fin_to_unopened', 'outcome': 'rst'}
+
+=== verdict: REAL_TCP ===
+  reason: prompt SYN-ACK, prompt kernel RST (81ms), all probes answered
+  total time: 518 ms
+
+# saved: /media/sf_Git/evidence/20260509-123550_active-probe_158.101.122.42_22.txt

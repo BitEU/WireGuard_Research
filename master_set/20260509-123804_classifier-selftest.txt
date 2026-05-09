@@ -1,0 +1,12 @@
+# classifier self-test at 2026-05-09T12:38:04
+# evidence: /media/sf_Git/evidence/20260509-123804_classifier-selftest.txt
+[OK] init               -> ('HANDSHAKE_INIT', 1, True)
+[OK] response           -> ('HANDSHAKE_RESPONSE', 2, True)
+[OK] cookie             -> ('COOKIE_REPLY', 3, True)
+[OK] data80             -> ('TRANSPORT_DATA', 4, False)
+[OK] too short          -> None
+[OK] bad type           -> None
+[OK] nonzero rsvd       -> None
+[OK] wrong length       -> None
+
+result: PASS (8/8)

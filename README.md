@@ -25,8 +25,10 @@ dpi-baseline/   Section 4 of the paper: trivial passive WG fingerprint
 novel/          Sections 5-6: active prober + flow-feature classifier
 evidence/       timestamped artifacts from every run
 latex-paper/    IEEE conference template with report.tex
+master_set/     canonical artifacts the paper's numbers are pulled from
 notes/          lit-review and dataset citation notes
-slides/         presentation deck
+slides/         presentation deck (build_slides.py + .pptx)
+demo/           live TUI demo for the in-person presentation
 ```
 
 ---
@@ -173,6 +175,21 @@ TWO_FEATURE=1 python3 train_classifier.py \
 The two-feature run is the headline (`bulk_fraction` and `ack60_fraction` only,
 ~99.9% accuracy, AUC 1.000). Confusion matrix, ROC, and feature-importance
 plots land in `evidence/<timestamp>_classifier_*.png`.
+
+---
+
+## Live demo (in-person presentation)
+
+For the actual in-person demo, use the snappy TUI dashboard instead of
+running the steps above one at a time. Five scenes, manual advance with
+SPACE, runs in about 90 seconds:
+
+```bash
+sudo apt install -y python3-rich python3-scapy python3-sklearn python3-pandas
+sudo python3 /media/sf_Git/demo/demo.py
+```
+
+See [`demo/RUNBOOK.md`](demo/RUNBOOK.md) for the talking-points cheat sheet.
 
 ---
 

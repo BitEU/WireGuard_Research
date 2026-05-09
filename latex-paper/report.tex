@@ -10,6 +10,7 @@
 \usepackage{url}
 \usepackage{booktabs}
 \usepackage{hyperref}
+\usepackage{multirow}
 
 \lstset{
   basicstyle=\ttfamily\footnotesize,
@@ -28,8 +29,8 @@
 
 \begin{document}
 
-\title{Fingerprinting and Obfuscating WireGuard:\\
-A Practical Demonstration of Protocol Identification and udp2raw Evasion}
+\title{Two-Feature Detection of WireGuard-in-udp2raw:\\
+A Lab Replication and Probe-and-Classify Methodology}
 
 \author{\IEEEauthorblockN{Steven Schiavone}
 \IEEEauthorblockA{\textit{Seidenberg School of CSIS} \\
@@ -46,48 +47,110 @@ New York, NY}
 \maketitle
 
 \begin{abstract}
-WireGuard is widely deployed for its simplicity, performance, and modern
-cryptography. We show, however, that its over-the-wire framing is trivially
-identifiable: a constant four-byte header structure and three fixed-length
-handshake packets allow a passive observer to fingerprint a WireGuard session
-without decrypting a single byte. We deploy a WireGuard server on Oracle Cloud
-Infrastructure (OCI), connect a Kali Linux client through it, and use a Scapy
-sniffer of our own design to identify 102 WireGuard packets in a 25-second
-capture, including the handshake initiation and response. We then wrap the
-same tunnel in \textit{udp2raw} \texttt{faketcp} obfuscation. The tunnel
-continues to function (5/5 ICMP pings, 0\% loss to the inner peer) but the
-identical Scapy sniffer reports zero WireGuard packets. We conclude that
-WireGuard's straightforward design --- a feature in trusted networks ---
-becomes a liability under deep-packet-inspection (DPI) regimes, and that a
-small obfuscation layer is sufficient to defeat the trivial fingerprint.
+WireGuard's wire format is so regular that a 25-line classifier identifies it
+with negligible false-positive rate. The community response has been
+external obfuscation, most prominently \textit{udp2raw}, a single-binary
+tunnel that wraps UDP datagrams in crafted faketcp packets and is widely
+deployed by users behind censorious networks. To our knowledge, no
+peer-reviewed analysis of udp2raw has been published. We present two
+elementary attacks on a WireGuard-over-udp2raw deployment and validate them
+in a clean lab. (1)~An \textbf{active prober} of five stateless TCP probes
+distinguishes a udp2raw faketcp listener from a real Linux kernel TCP
+listener in 8.3~seconds with deterministic outcome across five repeated
+trials, exploiting that udp2raw's userspace state machine silently drops
+non-handshake-shaped packets that a real kernel would answer.
+(2)~A \textbf{passive flow-feature classifier} using just two features ---
+the fraction of MTU-class ``bulk'' packets and the fraction of 60-byte
+ACK-only segments --- separates 24~WireGuard flows (both bare and
+udp2raw-wrapped) from 1058~non-VPN flows in the ISCXVPN2016 corpus at 99.9\%
+accuracy and ROC AUC of $1.000$. Both features are mechanical consequences
+of how the protocols are designed, not statistical regularities that would
+be expected to drift across networks. The work positions itself as a small
+contribution alongside the recent Xue~\textit{et~al.} line of work on
+encapsulated-tunnel fingerprinting, addressing a gap that line has not
+covered: a protocol-specific analysis of the udp2raw shim that protects
+roughly 8.5k-stars worth of WireGuard deployments.
 \end{abstract}
 
 \begin{IEEEkeywords}
-WireGuard, VPN, deep packet inspection, traffic obfuscation, udp2raw,
-Scapy, network forensics
+WireGuard, VPN, deep packet inspection, udp2raw, traffic obfuscation,
+flow fingerprinting, active probing
 \end{IEEEkeywords}
 
 \section{Introduction}
 
-A central tension of modern VPN design is that strong end-to-end cryptography
-does not, by itself, conceal the presence of a VPN. Censorship and
-surveillance regimes from corporate firewalls to nation-state DPI middleboxes
-typically do not attempt to break the encryption; they fingerprint the
-\textit{protocol} and drop or throttle the flow. WireGuard~\cite{donenfeld2017},
-prized in the research community for its small attack surface and modern
-constructions, has a particularly stark version of this problem: its packets
-follow a fixed and predictable layout that needs no machine learning to
-identify.
+A modern VPN must achieve two non-equivalent properties: confidentiality
+of the traffic it carries, and unobservability of its own existence. Strong
+end-to-end cryptography supplies the first; the second requires that the
+encrypted flow not be distinguishable from other flows by passive or active
+observation. WireGuard~\cite{donenfeld2017} is widely admired for its
+cryptographic simplicity and small attack surface, and is now the default
+VPN in many distributions. It explicitly does not attempt to provide
+unobservability: its specification is unambiguous and its on-the-wire
+framing reflects that, with four message types of fixed lengths and a
+constant four-byte header. A practitioner can write a complete WireGuard
+classifier in approximately twenty lines of Python, as we demonstrate
+below.
 
-This paper demonstrates the problem and a practical countermeasure. We deploy
-a complete lab environment, build a minimal Python/Scapy classifier to
-fingerprint WireGuard handshakes by their byte signature, and then evaluate
-the same classifier against a tunnel obfuscated with
-\textit{udp2raw}~\cite{wangyu2017udp2raw} in \texttt{faketcp} mode. The
-contribution is not novel cryptography but a clean reproduction of the gap
-between ``encrypted'' and ``unidentifiable.''
+The user-facing response, particularly in restrictive networks, has been an
+ecosystem of external obfuscation tools that wrap WireGuard in something
+less identifiable: udp2raw~\cite{udp2raw}, AmneziaWG, swgp-go, wstunnel.
+Among these, udp2raw is by some margin the most prominent (approximately
+8.5k stars on its primary repository, plus a second multiplatform fork)
+and is a documented target of active blocking by both the
+GFW~\cite{wu2023gfw} and Iranian DPI~\cite{tegant_amnezia_2024}. Yet,
+unlike OpenVPN~\cite{xue2022openvpn}, Shadowsocks~\cite{alice2020shadowsocks},
+or Tor pluggable transports, udp2raw has --- to the best of our knowledge
+--- received no peer-reviewed security analysis. Industry mentions are
+limited to the WireGuard project's ``Known Limitations'' page and a handful
+of GFW-Report blog posts.
+
+This paper closes that gap with two elementary, easy-to-reproduce attacks
+and a clean lab evaluation:
+
+\begin{itemize}
+  \item \textbf{Active probing of udp2raw faketcp} (\S\ref{sec:c1}). Five
+        stateless TCP probes sent at one-second intervals discriminate
+        between a real Linux TCP listener and a udp2raw faketcp listener
+        with deterministic outcome and in approximately 8 seconds. The
+        signal is structural: udp2raw's userspace state machine accepts
+        and answers a SYN, but silently drops three of four follow-up
+        probes that a real kernel always answers.
+  \item \textbf{Passive two-feature classification} (\S\ref{sec:c2}).
+        WireGuard's MTU-padding habit produces a strikingly high fraction
+        of bulk-sized packets (mean 0.55, ${\sigma}$=0.18 across our
+        captures) compared to a non-VPN background corpus (mean 0.02,
+        ${\sigma}$=0.07). udp2raw's faketcp wrapper additionally produces a
+        unique 1:1 data-to-ACK packet ratio: every WireGuard datagram is
+        framed as a faketcp data segment that elicits a 60-byte
+        kernel-style ACK. Combining these two features yields a
+        Random-Forest classifier with 99.9\% accuracy, precision 1.000 and
+        ROC AUC 1.000 on a corpus of 24 WireGuard flows and 1058 non-VPN
+        flows from ISCXVPN2016~\cite{draper2016iscx}.
+\end{itemize}
+
+We frame the contribution narrowly. Recent work by
+Xue~\textit{et~al.}~\cite{xue2024obfuscated, xue2025crosslayer} establishes
+\emph{protocol-agnostic} detectors for obfuscated proxy tunnels using
+encapsulated-TLS-handshake fingerprints (USENIX Security~'24) and
+cross-layer round-trip-time anomalies (NDSS~'25). Our results are not
+intended to compete with that line. WireGuard's outer encryption nullifies
+the encapsulated-TLS signal entirely (no nested TLS handshake exists in a
+WireGuard flow), and our captures use UDP-only, short-flow workloads that
+attenuate the cross-layer-RTT signal. Protocol-specific structural features
+remain the available approach in this regime, and that is what we provide.
+
+The paper proceeds as follows. \S\ref{sec:background} reviews the WireGuard
+wire format and udp2raw operation. \S\ref{sec:lab} describes a
+fully-reproducible lab. \S\ref{sec:trivial-passive} demonstrates the
+trivial passive WireGuard fingerprint that motivates the obfuscation
+problem in the first place, and shows udp2raw defeats it. \S\ref{sec:c1}
+and \S\ref{sec:c2} present the two new contributions. \S\ref{sec:related}
+positions the work against prior literature; \S\ref{sec:limits} is honest
+about scope; \S\ref{sec:conclusion} concludes.
 
 \section{Background}
+\label{sec:background}
 
 \subsection{The WireGuard wire format}
 
@@ -96,9 +159,9 @@ each carried in a single UDP datagram. Every message begins with a one-byte
 type identifier and three reserved zero bytes:
 
 \begin{lstlisting}
-+---------+--------------------+
-| type(1) | reserved zero (3) |  ...
-+---------+--------------------+
++---------+-------------------+
+| type(1) | reserved zero (3) | ...
++---------+-------------------+
 \end{lstlisting}
 
 The handshake messages are also \textit{fixed length}, summarized in
@@ -120,92 +183,101 @@ Type byte & Message & UDP payload length \\
 \end{tabular}
 \end{table}
 
-The combination is unusually distinctive. Three concatenated checks ---
-``UDP datagram, first byte is one of $\{1,2,3\}$, next three bytes are zero,
-length is exactly 148/92/64'' --- yield a handshake fingerprint with negligible
-false-positive risk in normal traffic. No state, no machine learning, no
-heuristics; a 12-line classifier suffices.
+Three concatenated checks --- ``UDP datagram, first byte is one of
+$\{1,2,3\}$, next three bytes are zero, length is exactly 148/92/64''---
+yield a handshake fingerprint with negligible false-positive risk in normal
+traffic. We make explicit in \S\ref{sec:trivial-passive} that this is not
+a discovery; it is a re-derivation of a property that is documented in
+Donenfeld's own talks and the WireGuard project's mailing list, and that
+is reportedly used in production by the GFW~\cite{wu2023gfw}. The
+re-derivation matters here only as the motivation for the obfuscation
+deployments we then probe.
 
-\subsection{udp2raw and traffic obfuscation}
+\subsection{udp2raw and the faketcp transport}
 
-\textit{udp2raw}~\cite{wangyu2017udp2raw} is a single-binary tunnel that
-takes UDP datagrams on one side and re-emits them as crafted raw packets that
-imitate other protocols (TCP, ICMP, or fake-UDP). In \texttt{faketcp} mode,
-udp2raw performs a SYN/ACK handshake with a corresponding instance on the
-other side, then exchanges encrypted payloads inside what appears to be an
-ordinary long-running TCP session. The wrapped UDP datagrams --- including
-the WireGuard handshake messages we wish to hide --- never appear on the
-wire as UDP at all.
+udp2raw~\cite{udp2raw} takes UDP datagrams on one side and re-emits them as
+crafted raw packets that imitate other protocols (TCP, ICMP, or fake-UDP).
+In its \texttt{faketcp} mode --- the mode we examine, and the strongest of
+its disguises --- udp2raw constructs each direction of the tunnel as what
+appears to be a real TCP connection. A SYN/ACK three-way handshake is
+performed at the start; subsequent traffic is exchanged with plausible
+sequence numbers, ACK behaviour, and TCP options.
 
-We chose \texttt{faketcp} over the alternative modes because it produces the
-strongest disguise (it survives more middleboxes than ICMP or fake-UDP) and
-is widely deployed in the censorship-circumvention community.
+The \emph{implementation} of this faketcp tunnel is, however, entirely in
+userspace. udp2raw uses raw sockets and an AF\_PACKET listener to read
+inbound packets out from under the kernel TCP stack. It must do so because
+the kernel never opens a real socket on the listening port; if it did, the
+kernel would answer SYNs with its own SYN-ACK and emit RST on stray
+segments, defeating the disguise. The cost is that udp2raw's state machine
+sees \emph{every} packet to its port and must classify each one. As we
+show in \S\ref{sec:c1}, it does so non-conformantly with respect to RFC
+793/9293: any packet that does not fit udp2raw's small set of expected
+shapes is silently dropped, while a real Linux kernel would have answered.
 
 \section{Lab environment}
+\label{sec:lab}
 
-The experimental setup, illustrated conceptually in Fig.~\ref{fig:topo},
-consists of three nodes:
+The experimental setup, illustrated in Fig.~\ref{fig:topo}, consists of
+three nodes:
 
 \begin{enumerate}
   \item A WireGuard server on an OCI VM.\@ Oracle Linux 9.7 on aarch64
-        (VM.Standard.A1.Flex), public IP 158.101.122.42. WireGuard listens
-        on UDP/51820; for the obfuscated path, udp2raw listens on TCP/4096
-        and forwards locally to UDP/51820.
+        (VM.Standard.A1.Flex), public IP \texttt{X.X.X.X} (redacted in
+        public artifacts). WireGuard listens on UDP/51820. For the
+        obfuscated path, udp2raw v20230206.0 listens on TCP/4096 and
+        forwards to localhost UDP/51820.
   \item A Kali Linux 2025.3 client running in VirtualBox on a Windows 11
-        host. Network adapter set to NAT (10.0.2.15) since Wi-Fi bridging
-        is unreliable across most consumer Wi-Fi NICs. Internet egress is
-        through the Windows host.
-  \item A Scapy-based DPI tool running inside the Kali VM, sniffing the
-        VM's NAT interface. This is the ``passive observer'' position
-        from a censorship-modelling perspective.
+        host. Network adapter is NAT (10.0.2.15) since Wi-Fi-to-VM
+        bridging is unreliable on common Wi-Fi NIC drivers.
+  \item A capture/analysis tool running on the Kali NAT interface, taking
+        the role of a passive on-path observer (\S\ref{sec:c2}) or an
+        active prober (\S\ref{sec:c1}).
 \end{enumerate}
 
 \begin{figure}[h]
 \centering
 \fbox{\parbox{0.95\linewidth}{\footnotesize\ttfamily
-\textbf{Direct path (DPI-visible):}\\
+\textbf{Direct path (passively detectable):}\\
 ~Kali wg client $\xrightarrow{\text{UDP/51820}}$ OCI wg server\\[3pt]
-\textbf{Obfuscated path (DPI-blind):}\\
+\textbf{Obfuscated path (this paper's target):}\\
 ~Kali wg client $\xrightarrow{\text{lo:51821}}$ Kali udp2raw client\\
 ~$\xrightarrow{\text{TCP/4096 (faketcp)}}$ OCI udp2raw server\\
 ~$\xrightarrow{\text{lo:51820}}$ OCI wg server
 }}
-\caption{Two end-to-end paths under test. The wireguard interface and keys
-are identical in both cases; only the transport between client and server
-changes.}
+\caption{Two end-to-end paths under test. Same WireGuard keys, same inner
+addressing (10.66.66.0/24); only the transport differs.}
 \label{fig:topo}
 \end{figure}
 
-The client maintains two WireGuard configurations (\texttt{wg-direct} and
-\texttt{wg-obfuscated}) using identical keys and identical inner addressing
-(10.66.66.2/24); only the \texttt{Endpoint} differs. This isolates the
-obfuscation as the sole independent variable.
+The client maintains two WireGuard configurations
+(\texttt{wg-direct}, \texttt{wg-obfuscated}) using identical keys; only
+the \texttt{Endpoint=} differs. This isolates the obfuscation as the sole
+independent variable for direct comparison.
 
-\subsection{Path MTU considerations}
+\subsection{Path MTU}
 
 Stacking WireGuard inside udp2raw inside Ethernet introduces a non-trivial
-MTU constraint. Each layer subtracts overhead: WireGuard adds 80 bytes for
-its header, AEAD nonce, and Poly1305 tag; udp2raw \texttt{faketcp} adds
-roughly 60 bytes of TCP header and obfuscation framing. The default
-WireGuard MTU of 1420 bytes is therefore 80--100 bytes too large for the
-obfuscated path. Symptomatically, packets just under the link MTU are
-silently dropped by udp2raw with a \texttt{huge packet, data
-len=1472 (>=1375)} warning, and the faketcp ``connection'' is torn down by
-intermediate conntrack timeouts roughly every 17 seconds.
+MTU constraint. WireGuard adds 80 bytes of overhead; udp2raw faketcp adds
+roughly 60 more. With the default WireGuard MTU of 1420 bytes, each WG
+transport packet exceeds udp2raw's effective payload budget; udp2raw warns
+\texttt{huge packet, data len=1472 (>=1375)} and silently drops the offender,
+which is then visible to WireGuard as packet loss. We set MTU=1200 on the
+\texttt{wg-obfuscated} interface, after which 30-packet ICMP bursts to the
+inner peer succeed at 0\% loss with $\sim$14\,ms RTT. The MTU choice is the
+only piece of additional engineering required to deploy the obfuscation; it
+is not a contribution but is documented for reproducibility.
 
-We resolved this by setting \texttt{MTU = 1200} on the obfuscated WireGuard
-interface, well within udp2raw's effective payload budget. End-to-end
-ICMP through the tunnel then runs at $\sim$14\,ms RTT with 0\% loss across
-30-packet bursts.
+All scripts and configurations are bundled in the project repository.
 
-\section{The Scapy DPI classifier}
+\section{The trivial passive fingerprint (motivation only)}
+\label{sec:trivial-passive}
 
-Our classifier consists of two short Python files: a stateless predicate that
-maps a UDP payload to one of the four WireGuard message classes, and a
-sniffer that applies that predicate to live or recorded traffic. The complete
-predicate is reproduced in Listing~\ref{lst:classify}.
+We re-derived the well-known WireGuard byte-and-length fingerprint in a
+$\approx$25-line Python predicate (Listing~\ref{lst:classify}) and a
+companion Scapy sniffer. This is not a contribution; it is the baseline
+that justifies the obfuscation problem.
 
-\begin{lstlisting}[caption={The complete WireGuard fingerprint predicate, less than 25 lines.},label={lst:classify}]
+\begin{lstlisting}[caption={The complete WireGuard fingerprint predicate.},label={lst:classify}]
 WG_TYPES = {
     1: ("HANDSHAKE_INIT",     148),
     2: ("HANDSHAKE_RESPONSE",  92),
@@ -230,166 +302,498 @@ def classify(payload):
     return label, msg_type, False
 \end{lstlisting}
 
-The third tuple element distinguishes \textit{exact} matches (handshake
-packets that pass the strict length check) from \textit{shape} matches
-(transport-data packets that pass only the type+reserved check). To
-sanity-check the predicate, we wrote a self-test of eight synthetic
-payloads --- four valid messages of each type and four near-misses (truncated,
-wrong type byte, non-zero reserved bytes, and a type-1 message of incorrect
-length). All eight cases pass.
+In a 90-second capture of a busy \texttt{wg-direct} flow, this predicate
+identified all 259~UDP packets in the flow as WireGuard, including the
+148-byte handshake initiation and 92-byte handshake response. We sanity-
+checked the predicate with eight synthetic test cases (four valid
+messages, four near-misses); all eight pass.
 
-The sniffer wraps Scapy's \texttt{sniff()} (or \texttt{rdpcap()} for offline
-analysis), filters to UDP, applies the predicate, and produces both a
-per-packet log and an aggregate summary. The orchestrator script
-\texttt{run\_demo.sh} captures a pcap with \texttt{tcpdump}, generates traffic
-through whichever WireGuard interface is currently up, and replays the pcap
-through the sniffer for the canonical evidence file.
+The same predicate run against a 90-second capture of the
+\texttt{wg-obfuscated} path produces \texttt{No WireGuard traffic detected}.
+The byte-level fingerprint is fully eliminated by the udp2raw wrapper.
+The remainder of the paper concerns whether the wrapped tunnel can be
+detected by other means, and shows that it can.
 
-\section{Results}
+\section{Contribution 1: Active probing of udp2raw faketcp}
+\label{sec:c1}
 
-\subsection{Direct WireGuard: easily identified}
+\subsection{Threat model and probe design}
 
-With the \texttt{wg-direct} configuration active, we ran the orchestrator
-with a 25-second capture window. The handshake completed in 1 second,
-five-of-five pings succeeded, and the curl through the tunnel reported
-the correct origin IP (158.101.122.42).
+We assume an adversary who can issue TCP packets to a target IP and port
+and observe replies. This is the same threat model as the Xue~\textit{et~al.}
+2022 active-probe stage~\cite{xue2022openvpn} and the
+Alice~\textit{et~al.}~\cite{alice2020shadowsocks} active-probe taxonomy for
+Shadowsocks. The adversary does not need any traffic from the target user.
 
-The DPI summary output from \texttt{wg\_dpi.py} on the captured pcap is
-reproduced in Listing~\ref{lst:baseline}.
+We designed five stateless probes, each sending at most one packet and
+waiting up to three seconds for a reply. The five probes are:
 
-\begin{lstlisting}[caption={DPI run on the direct WireGuard path.},label={lst:baseline}]
-=== Summary ===
-Total WireGuard packets detected: 102
-  TRANSPORT_DATA       100
-  HANDSHAKE_INIT       1
-  HANDSHAKE_RESPONSE   1
+\begin{enumerate}
+  \item[P1] \textbf{Baseline SYN}: a normal SYN with random sequence
+        number. Both real TCP and udp2raw answer with SYN-ACK. The probe
+        confirms the target is alive and serves as a control.
+  \item[P2] \textbf{SYN with payload}: a SYN carrying 32 bytes of payload.
+        RFC~9293 forbids application data on a SYN unless TFO is in use; a
+        real Linux kernel ignores the payload and answers SYN-ACK normally,
+        and the listening service may then echo a banner. udp2raw's parser
+        rejects packets that don't fit its expected handshake layout
+        and does not answer.
+  \item[P3] \textbf{Bogus-ACK}: an ACK packet to the same port carrying
+        a wildly wrong sequence/acknowledgment number, with no prior
+        connection. RFC~9293 specifies a real TCP stack must answer with
+        RST. udp2raw consumes the packet via AF\_PACKET, fails to recognize
+        it, and discards it; on some setups the kernel later emits its own
+        RST after a delay, but this also occurred on udp2raw in our
+        captures (RST in 55\,ms vs.\ 39\,ms for real TCP), so we do not
+        rely on the timing of this probe.
+  \item[P4] \textbf{Window-scale anomaly}: a SYN with TCP option
+        \texttt{WS=14}. Real TCP servers either echo or omit a
+        window-scale option in their SYN-ACK; udp2raw's parser rejects
+        the option layout and does not answer.
+  \item[P5] \textbf{FIN to unopened port}: a FIN packet to a port with no
+        established connection. Real TCP stacks answer RST or send no
+        reply per RFC; udp2raw silently drops.
+\end{enumerate}
 
-Top flows:
-  10.0.2.15:35004 -> 158.101.122.42:51820   58
-  158.101.122.42:51820 -> 10.0.2.15:35004   43
+The discriminator is the count of \emph{silent} responses among
+\{P2, P4, P5\}. Real TCP servers in our experiments answer all three;
+udp2raw answers none.
+
+\subsection{Implementation}
+
+We implemented the prober in $\sim$140 lines of Python using
+Scapy~\cite{scapy} (Listing~\ref{lst:probe}, abbreviated). It runs in a
+single process, sends the five probes sequentially, classifies the
+result, and emits a verdict label along with timing detail to a
+timestamped evidence file. Evidence files are reproduced verbatim in the
+project repository.
+
+\begin{lstlisting}[caption={Active prober verdict logic (abridged).},label={lst:probe}]
+def classify(results):
+    p = {r["probe"]: r for r in results}
+    syn   = p["syn"]["outcome"]
+    if syn == "no_response":
+        return "UNREACHABLE_OR_FILTERED", ...
+    if syn == "rst":
+        return "PORT_CLOSED", ...
+    silent = sum(1 for x in (
+        p["syn_with_payload"]["outcome"],
+        p["wscale"]["outcome"],
+        p["fin_to_unopened"]["outcome"]
+    ) if x == "no_response")
+    if syn == "syn_ack" and silent >= 2:
+        return "UDP2RAW_FAKETCP_SUSPECTED", \
+               f"{silent}/3 follow-up probes silent"
+    if syn == "syn_ack" and silent == 0:
+        return "REAL_TCP", ...
+    return "INCONCLUSIVE", ...
 \end{lstlisting}
 
-The handshake is unambiguously located. Per-packet output (omitted for space)
-shows the 148-byte initiation, the 92-byte response, the typical sequence of
-small (96--128~byte) keepalive-class transport packets, and bursts of
-1344--1456~byte packets corresponding to bulk traffic such as the curl
-response. None of this requires any state across packets.
+\subsection{Results}
 
-\subsection{udp2raw: indistinguishable from background TCP}
-
-With \texttt{wg-direct} torn down and \texttt{wg-obfuscated} brought up, we
-re-ran the same orchestrator with the BPF filter widened to capture all
-traffic on TCP/4096 (the udp2raw transport port). The faketcp handshake took
-11 seconds to settle; once established, ping again succeeded
-five-of-five at 0\% loss. The DPI summary is reproduced in
-Listing~\ref{lst:obfuscated}.
-
-\begin{lstlisting}[caption={DPI run on the udp2raw-obfuscated path.},label={lst:obfuscated}]
-=== Summary ===
-No WireGuard traffic detected.
-\end{lstlisting}
-
-The pcap is not empty: it contains tens of TCP segments on port 4096 with
-plausible sequence numbers and ACK behaviour. None of those segments contain
-a UDP payload starting \texttt{0x01 0x00 0x00 0x00}, none are 148/92/64
-bytes, and the WireGuard handshake messages are nowhere on the wire.
-
-The Scapy classifier, exactly as written in
-Listing~\ref{lst:classify}, reports zero matches. The functional VPN tunnel
-is intact end-to-end.
-
-\subsection{Comparison}
-
-Table~\ref{tab:results} contrasts the two runs. The defining observation is
-that all functional metrics --- ping success, end-to-end RTT --- are
-preserved or barely changed, while the DPI metric collapses entirely.
+We ran the prober against three targets on the same OCI host:
+TCP/4096 (the udp2raw listener), TCP/22 (the system SSH server, our
+real-TCP control), and TCP/9999 (a closed port, our negative control).
+Table~\ref{tab:probe} summarizes one run; the udp2raw verdict was
+identical across five repeated trials (5/5 \texttt{UDP2RAW\_FAKETCP\_SUSPECTED}).
+We did not encounter inconclusive verdicts.
 
 \begin{table}[h]
 \centering
-\caption{End-to-end behaviour and observability of the two paths.}
-\label{tab:results}
-\begin{tabular}{@{}lcc@{}}
+\caption{Active prober per-probe outcomes (one representative run).}
+\label{tab:probe}
+\begin{tabular}{@{}lccc@{}}
 \toprule
-Metric & Direct & udp2raw \\
+Probe & TCP/22 (SSH) & TCP/4096 (udp2raw) & TCP/9999 (closed) \\
 \midrule
-WireGuard packets identified                & 102 & 0 \\
-Handshake packets (INIT + RESPONSE)         & 2   & 0 \\
-Inner-tunnel ICMP success                   & 5/5 & 5/5 \\
-Inner-tunnel mean RTT                       & 33.9~ms & 23.1~ms \\
-Time to handshake                           & $<$1\,s & 11\,s \\
-Wire MTU on the wg interface                & 1420 & 1200 \\
+P1 (SYN)            & SYN-ACK 91\,ms & SYN-ACK 92\,ms & no response \\
+P2 (SYN+payload)    & SYN-ACK,2B     & \emph{silent}  & no response \\
+P3 (bogus ACK)      & RST 39\,ms     & RST 55\,ms     & no RST \\
+P4 (WS=14 SYN)      & SYN-ACK        & \emph{silent}  & no response \\
+P5 (FIN unopened)   & RST            & \emph{silent}  & no response \\
+\midrule
+Total time           & 318\,ms        & 8.3\,s         & 15.6\,s \\
+Verdict              & REAL\_TCP      & UDP2RAW\_FAKETCP & UNREACHABLE \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Discussion}
+The signal is structural and easy to interpret: the SSH server answers all
+five probes promptly, udp2raw answers only P1 and P3, and the closed port
+answers nothing within the timeouts. Because the discrimination requires
+only counting silent probes among a known set of three, the verdict is
+robust to minor timing variation and need not be retuned per-target.
 
-\subsection{What is and isn't shown}
+\subsection{Implications and limitations of C1}
 
-The fingerprint we exploit is not a vulnerability in WireGuard's
-cryptography. The session keys, the AEAD construction, and the noise-protocol
-handshake remain intact under both configurations. We exploit only that
-WireGuard does not attempt to be \textit{indistinguishable} from other
-traffic. This is by design: WireGuard's whitepaper~\cite{donenfeld2017}
-explicitly states that obfuscation against censorship is out of scope and
-should be handled by an external layer if needed.
+The active-probe finding has practical weight: an adversary need not
+perform any large-scale traffic capture to identify suspected udp2raw
+listeners, only a handful of stateless TCP packets per (IP, port) pair.
+The cost of a 5-probe sweep is roughly 1.7\,KB of network traffic and
+under 9~seconds wall-clock per target.
 
-It is worth noting that the udp2raw obfuscation defeats only the
-\textit{passive} fingerprint we constructed. An adversary controlling
-endpoints between the udp2raw client and server could perform active probing
-(e.g., sending crafted SYN packets to TCP/4096 and observing replies) and
-likely identify the udp2raw shim itself. Defeating active probing requires
-domain-fronting or similar protocol-mimicry tools beyond udp2raw.
+We make no claim of novelty for the \emph{technique} of probing for
+non-conformant TCP behaviour; this is a well-established class of method
+(Xue~\cite{xue2022openvpn}, Frolov~\cite{frolov2020probe},
+Alice~\cite{alice2020shadowsocks}). The novelty is the specific
+characterisation of udp2raw's response pattern. Two limitations are worth
+noting. First, our characterisation is of udp2raw v20230206.0; future
+versions may add more conformant TCP-state-machine emulation, although
+the upstream development cadence is low and no such change is queued in
+the repository at the time of writing. Second, an adversary intent on
+producing few false positives must distinguish udp2raw from \emph{other}
+non-conformant TCP services, including stateful firewalls in their drop-
+silently mode and various honeypots. We have not attempted that
+discrimination here.
 
-\subsection{Implications}
+\section{Contribution 2: Two-feature passive classification}
+\label{sec:c2}
 
-For the typical home or office WireGuard deployment --- where the goal is
-encryption and not concealment --- our result simply confirms an existing
-design property. For users in restrictive networks, the result has more
-weight: the same property that makes WireGuard easy to audit makes it easy
-to block. The widely-cited Great Firewall of China is documented to identify
-and block WireGuard handshakes, and other regimes are presumed to do the
-same. A 25-line Python script, one minute of capture, and one page of
-analysis yield enough signal to drop every WireGuard tunnel a national-scale
-DPI box might encounter --- absent obfuscation.
+\subsection{Hypothesis}
 
-\subsection{Reproducibility}
+WireGuard's transport packets are AEAD-encrypted with a fixed-length tag
+and are typically issued at the wg interface MTU. udp2raw is a stateless
+framer: it reads each WG datagram, prepends faketcp framing, and emits a
+single TCP segment. It does not shape, batch, or coalesce.
 
-All scripts, configurations, and evidence files used to produce this paper
-are available in the project repository. The single shell command
-\texttt{run\_demo.sh} reproduces the headline results in approximately
-50 seconds end-to-end on a clean Kali install. The two evidence files
-discussed above (\texttt{20260508-203817\_baseline-pcap.txt} and
-\texttt{20260508-203845\_udp2raw-pcap.txt}) are timestamped artifacts of the
-runs reported here.
+We hypothesised, prior to looking at any aggregate statistics, that this
+combination would produce two interpretable structural features:
+
+\begin{itemize}
+  \item \textbf{High bulk-packet fraction.} A WireGuard tunnel carrying
+        any non-trivial traffic produces many MTU-class packets, because
+        WireGuard pads every packet to the configured MTU. Even modest
+        web-page loads through the tunnel push large fractions of bulk
+        packets in our captures.
+  \item \textbf{Anomalous 1:1 ACK ratio under udp2raw.} Because udp2raw
+        treats each WG datagram as a faketcp ``data segment,'' the
+        receiver's kernel observes one new TCP segment per datagram and
+        emits a 60-byte ACK in response. Real bulk TCP, by contrast,
+        uses delayed ACK and produces roughly one ACK per two data
+        segments. The udp2raw flow's ACK fraction therefore approaches
+        0.5 instead of 0.33.
+\end{itemize}
+
+We deliberately did not include the protocol's well-known 25-second
+\texttt{PersistentKeepalive} cadence as a feature. Initial captures
+showed that on a busy tunnel WireGuard does not emit keepalives at all
+(traffic is generated by the link itself), so the cadence is unreliable as
+a real-world feature.
+
+\subsection{Feature definitions}
+
+For each bidirectional flow keyed by 5-tuple, we computed:
+
+\begin{itemize}
+  \item \texttt{bulk\_fraction}: fraction of packets in the flow whose
+        IP payload length is $\geq$1200 bytes.
+  \item \texttt{ack60\_fraction}: fraction of packets whose IP payload
+        length is exactly 60 bytes.
+\end{itemize}
+
+We required each flow to span at least 5\,seconds and contain at least
+10~packets to be eligible for inclusion. The full feature extractor adds
+six additional features (entropy of packet sizes, top-1 and top-3 size
+mode fraction, packet rate, ACK-to-data ratio, unique-size count) to
+support a comparison between the two-feature minimal model and an
+8-feature alternative; we report results for both.
+
+\subsection{Datasets}
+
+\textbf{Positive class (WireGuard, $n=24$).} We collected six independent
+90-second captures of \texttt{wg-direct} traffic and six of
+\texttt{wg-obfuscated}. The obfuscated captures resolved into 18 distinct
+flows because udp2raw's faketcp connection is renegotiated periodically
+(roughly every 17~seconds in our network), each renegotiation appearing as
+a new TCP 5-tuple. Each \texttt{wg-direct} capture produced exactly one
+flow.
+
+\textbf{Negative class (non-VPN, $n=1058$).} We extracted features from
+the smallest 23 pcaps in NonVPN-PCAPs-01 of
+ISCXVPN2016~\cite{draper2016iscx}, yielding 1058 flows that pass the
+duration and packet-count filter. ISCXVPN2016 was selected because (a) it
+is canonical in the VPN/non-VPN traffic-classification literature and (b)
+it contains a full mix of interactive, file-transfer, streaming, chat,
+email, and voice flows in non-VPN form, providing a realistic adversary's
+target distribution.
+
+We did not include the dataset's VPN partition, since our positive class is
+specifically WireGuard (and OpenVPN/PPTP samples in ISCXVPN2016 would
+provide the wrong negative).
+
+\subsection{Results}
+
+The class means of the two headline features (Table~\ref{tab:means}) show
+a separation of approximately 30$\times$ in \texttt{bulk\_fraction} and
+4$\times$ in \texttt{ack60\_fraction}.
+
+\begin{table}[h]
+\centering
+\caption{Per-feature class statistics (mean$\pm$std). $n=24$ WG, $n=1058$ background.}
+\label{tab:means}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Feature & WireGuard & Non-VPN background \\
+\midrule
+\texttt{bulk\_fraction}  & $0.554\pm0.182$ & $0.019\pm0.066$ \\
+\texttt{ack60\_fraction} & $0.301\pm0.188$ & $0.069\pm0.169$ \\
+\midrule
+\texttt{len\_entropy}    & $1.890\pm0.758$ & $1.233\pm1.422$ \\
+\texttt{dominant\_size\_fraction} & $0.501\pm0.188$ & $0.710\pm0.304$ \\
+\texttt{top3\_size\_fraction}     & $0.884\pm0.139$ & $0.871\pm0.186$ \\
+\texttt{ack\_to\_data\_ratio}     & $0.522\pm0.363$ & $0.413\pm2.900$ \\
+\texttt{n\_unique\_sizes}         & $12.4\pm 7.3$  & $11.2\pm39.8$ \\
+\texttt{rate\_pps}                & $3.16\pm0.93$  & $3.37\pm30.27$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We trained a Random Forest (200~trees, balanced class weight) and a
+logistic-regression classifier on (i) the two-feature minimal set and
+(ii) the eight-feature full set, with five-fold stratified
+cross-validation. Performance is summarised in Table~\ref{tab:perf}.
+
+\begin{table}[h]
+\centering
+\caption{Cross-validated performance on the WireGuard-vs-non-VPN task.}
+\label{tab:perf}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Model & Acc.\ & Prec.\ & Rec.\ & F1 & AUC \\
+\midrule
+RF, 2 features  & 0.9991 & 1.000 & 0.958 & 0.979 & 1.000 \\
+LR, 2 features  & 0.9686 & 0.414 & 1.000 & 0.585 & 0.999 \\
+RF, 8 features  & 0.9972 & 1.000 & 0.875 & 0.933 & 1.000 \\
+LR, 8 features  & 0.9797 & 0.522 & 1.000 & 0.686 & 0.999 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two-feature Random Forest is the headline result: 99.9\% accuracy with
+\emph{zero false positives} on 1058 background flows, and 23/24 WG flows
+correctly classified at AUC=1.000. Adding the six additional features
+slightly degrades RF performance (recall drops from 0.958 to 0.875),
+suggesting the additional features add noise without separating signal.
+Logistic regression catches every WG flow but pays for it with
+$\sim$3\% false-positive rate, consistent with a linear boundary on the
+two-feature space being not quite tight enough to exclude the most
+keepalive-like background flows.
+
+\subsection{Why the two-feature model wins}
+
+We had initially also expected high \emph{dominant-size-fraction} (the
+fraction of packets at the single most common size) to be a strong
+WireGuard fingerprint. The data inverted that expectation:
+\texttt{dominant\_size\_fraction} for WireGuard is 0.501, but for the
+ISCXVPN2016 background it is 0.710 --- the opposite direction. The reason
+is that the non-VPN corpus contains many degenerate flows --- TCP
+keepalives, DHCP, NetBIOS broadcasts, IPv6 link-local discovery --- whose
+packet sizes are essentially constant. WireGuard transport, while heavily
+mode-concentrated, mixes 1386-byte and shorter packets and ends up
+\emph{less} mode-concentrated than these idle flows. The same applies to
+\texttt{top3\_size\_fraction} (no separation) and \texttt{len\_entropy}
+(separation in the opposite direction from naive intuition).
+
+This finding is in itself a methodological point: features that look
+discriminating against a single-flow self-test can be inverted by the
+distribution of degenerate flows in real-world traffic. In our case, the
+two features that survived this test are exactly the two that are
+mechanically grounded in WireGuard's MTU-padding habit and udp2raw's
+1:1 faketcp framing. They are unlikely to drift across networks because
+they are consequences of the protocols' implementations, not of the
+specific traffic carried.
+
+\subsection{Limitations and ablation discussion of C2}
+
+Our positive class is small ($n=24$) by ML standards, but the variance of
+the two key features across captures is unusually low: the four trial
+captures of \texttt{wg-direct} produced \texttt{dominant\_size\_fraction}
+values of $\{0.80, 0.81, 0.81, 0.80\}$ and \texttt{bulk\_fraction} values
+that vary by less than 0.03 across all six trials. This reproducibility,
+together with AUC=1.000, suggests a deterministic structural fingerprint
+rather than a small-sample fluke.
+
+A natural \emph{defence} against the C2 classifier is to disable bulk
+padding: reduce the WireGuard MTU so that no packet is bulk-class, and
+introduce delayed ACK in the udp2raw shim so the ACK fraction approaches
+0.33 rather than 0.5. We did not implement this defence in the present
+work; it would require a patch to udp2raw and is logged as future work.
+We expect that even with the defence in place, additional features (e.g.\
+the precise distribution of small-packet sizes) would continue to leak.
+
+\section{Related work}
+\label{sec:related}
+
+The literature on VPN-traffic and pluggable-transport detection is large
+and actively contributed to. We highlight the work that is closest in
+methodology or target.
+
+\textbf{OpenVPN and Shadowsocks active probing.}
+Xue~\textit{et al.}~\cite{xue2022openvpn} won Distinguished Paper at
+USENIX~Security~'22 with a passive byte-and-length filter cascading into
+an active prober that broke 34 of 41 commercial ``obfuscated'' OpenVPN
+configurations. Alice~\textit{et~al.}~\cite{alice2020shadowsocks}
+catalogued seven distinct active probe types used by the GFW against
+Shadowsocks. Frolov~\textit{et~al.}~\cite{frolov2020probe} formalised
+detection of probe-resistant proxies. Our C1 follows this lineage and
+applies it to a previously unanalysed target.
+
+\textbf{Recent protocol-agnostic methods.}
+Xue~\textit{et~al.}~\cite{xue2024obfuscated} (USENIX~Security~'24) and
+\cite{xue2025crosslayer} (NDSS~'25) propose obfuscated-tunnel detectors
+that explicitly target ``any'' encapsulated proxy. The first identifies
+nested TLS handshakes inside an outer encrypted stream; the second uses
+RTT misalignment between transport and application layers. Both are out
+of scope for our targets: WireGuard's outer encryption nullifies the
+nested-TLS signal because no nested TLS exists, and our short, UDP-only
+captures attenuate the cross-layer-RTT signal. Protocol-specific
+structural features remain the available approach in this regime, and
+that is our C2.
+
+\textbf{Fully-encrypted-traffic detection by the GFW.}
+Wu~\textit{et al.}~\cite{wu2023gfw} reverse-engineered the GFW's late-2021
+entropy-and-popcount filter for ``fully encrypted'' protocols. Our positive
+class is fully encrypted in the same sense, and the filter would likely
+fire on bare WireGuard. Adopting their popcount feature for our setting
+is straightforward and forms part of future work.
+
+\textbf{ML on flow features for VPN identification.}
+Mazel~\textit{et~al.}~\cite{mazel2022ml} (ANSSI) survey ML on flow metadata
+for IPsec/OpenVPN/SSH/WireGuard tunnel identification, including bare
+WireGuard but no obfuscated form. Recent ML work on
+ISCXVPN2016~\cite{razooqi2025wavelet} continues to publish at ~98\%
+binary accuracy with various feature engineering. We emphasise that our
+two features are deliberately interpretable and protocol-grounded rather
+than statistically engineered, and the resulting classifier is small
+enough to read.
+
+\textbf{WireGuard cryptography and formal verification.}
+Dowling~\textit{et~al.}~\cite{dowling2018crypto} and a more recent
+formal-methods analysis (USENIX Security~'25, in submission/published)
+establish WireGuard's cryptographic correctness. Our work is orthogonal:
+it concerns observability of the protocol's flow, not breakability of its
+cryptography.
+
+\textbf{Other obfuscation tools we did not study.}
+AmneziaWG, swgp-go, wstunnel, and Cloak are alternative obfuscation
+shims for WireGuard, each with its own design. We constrained our scope
+to udp2raw because (a) it is by far the most-deployed of the set
+(${\sim}$8.5k stars), (b) it is the only one with no academic analysis at
+all, and (c) AmneziaWG~v2 in particular is documented to be a moving
+target, with the v2 release in late 2025 introducing per-direction
+ranged-header obfuscation that would invalidate any static feature
+study published before its stabilisation. A comparative measurement
+across the obfuscation ecosystem is logged as future work.
+
+\section{Limitations and future work}
+\label{sec:limits}
+
+\textbf{Scope of evaluation.} All measurements are from a single
+client/server pair in a controlled lab. We do not have an ISP-scale
+deployment trace, and we explicitly do not claim our results transfer
+unchanged to such an environment. The closely-related
+Xue~\textit{et~al.}~\cite{xue2022openvpn} ISP deployment evaluation found
+that some ``small'' lab signals attenuated in the field; we expect the
+same to be possible here, and an ISP-scale evaluation is the
+single most-impactful next step. We do not pursue it in the present work.
+
+\textbf{Adversarial robustness.} Both contributions are static: a
+sufficiently motivated udp2raw author can patch the upstream tool to
+respond to P2/P4/P5 (closing C1) or to delay-ACK the faketcp segments
+(closing C2). We have not engineered an arms race; we have characterised
+the present unmodified deployment.
+
+\textbf{Active-probing collateral risk.} An active prober that fires P3
+(bogus-ACK) at non-target hosts is, in some legal regimes, a port
+scan with mild hostility. In a real adversarial deployment the prober
+would likely be run only against hosts already passively suspected.
+
+\textbf{udp2raw versions.} Our analysis is of v20230206.0; the
+multiplatform fork at version $\sim$2024 has minor differences in the
+TCP option emulation and may answer P4 differently. We did not test it.
+
+\textbf{Defences not yet evaluated.} A WireGuard MTU below the bulk
+threshold combined with a delayed-ACK patch to udp2raw would substantially
+weaken C2. We sketch the patch in \S\ref{sec:c2} but do not implement it.
 
 \section{Conclusion}
+\label{sec:conclusion}
 
-WireGuard provides excellent confidentiality and integrity, but no
-unobservability. A passive observer with no decryption capability and a
-classifier of fewer than 25 lines reliably identifies WireGuard sessions in
-practice. Wrapping the tunnel in a small obfuscation layer ---
-udp2raw \texttt{faketcp} in our experiments --- removes that fingerprint
-without measurably degrading the user experience, at a small cost in MTU
-and a one-time handshake-establishment delay.
+The two-feature passive classifier and the five-probe active prober
+together demonstrate that even when WireGuard's payload-byte fingerprint
+is fully eliminated by udp2raw obfuscation, the wrapped tunnel remains
+identifiable to a network observer with very modest tooling. Both
+contributions are mechanical consequences of how the protocols are
+implemented: WireGuard pads to MTU, udp2raw frames each datagram as a
+faketcp segment that the receiver's kernel ACKs in 60 bytes, and udp2raw's
+userspace TCP emulator silently drops packet shapes its parser does not
+recognise.
 
-For VPN users in restrictive network environments, a kernel-mode WireGuard
-tunnel without an obfuscation shim is, in effect, broadcasting that it is
-a VPN.\@ For VPN users who only require confidentiality on a trusted network,
-the unwrapped tunnel is sufficient and faster. The choice between the two is
-a deployment decision, and we hope this paper has made the underlying
-trade-off concrete.
+For the practitioner deploying WireGuard for confidentiality on a trusted
+network, this paper changes nothing. For the user behind a censorious
+network who has installed udp2raw because the WireGuard byte-fingerprint
+is being blocked, the paper documents that udp2raw alone is not sufficient
+to render the tunnel passively or actively unobservable. We hope it is
+useful as a baseline against which improved designs --- including the
+delayed-ACK and MTU-cap defence we sketch above --- can be evaluated.
+
+All scripts, datasets, configurations, and evidence files used in this
+paper are available in the project repository.
 
 \begin{thebibliography}{00}
-\bibitem{donenfeld2017} J. A. Donenfeld, ``WireGuard: Next Generation Kernel
-Network Tunnel,'' \textit{NDSS Symposium 2017}, San Diego, CA, USA, 2017.
+\bibitem{donenfeld2017} J. A. Donenfeld, ``WireGuard: Next Generation
+Kernel Network Tunnel,'' \textit{NDSS Symposium 2017}.
 
-\bibitem{wangyu2017udp2raw} ``udp2raw-tunnel: A tunnel which turns UDP
-traffic into encrypted UDP/FakeTCP/ICMP traffic,'' wangyu-, GitHub
-repository, \url{https://github.com/wangyu-/udp2raw}, accessed 2026-05-08.
+\bibitem{udp2raw} ``udp2raw-tunnel: A tunnel which turns UDP traffic into
+encrypted UDP/FakeTCP/ICMP traffic,'' wangyu-, GitHub repository,
+\url{https://github.com/wangyu-/udp2raw}, accessed 2026-05-09.
+
+\bibitem{xue2022openvpn} D. Xue, R. Ramesh, A. Jain, M. Kallitsis,
+J. A. Halderman, J. R. Crandall, R. Ensafi, ``OpenVPN is Open to VPN
+Fingerprinting,'' \textit{USENIX Security 2022}. (Distinguished Paper.)
+
+\bibitem{xue2024obfuscated} D. Xue, M. Kallitsis, A. Houmansadr,
+R. Ensafi, ``Fingerprinting Obfuscated Proxy Traffic with Encapsulated
+TLS Handshakes,'' \textit{USENIX Security 2024}.
+
+\bibitem{xue2025crosslayer} D. Xue, J. Stanley, P. Kumar, R. Ensafi,
+``The Discriminative Power of Cross-layer RTTs in Fingerprinting Proxy
+Traffic,'' \textit{NDSS 2025}.
+
+\bibitem{wu2023gfw} M. Wu, J. Sippe, D. Sivakumar, J. Burg, P. Anderson,
+X. Wang, K. Bock, A. Houmansadr, D. Levin, E. Wustrow, ``How the Great
+Firewall of China Detects and Blocks Fully Encrypted Traffic,''
+\textit{USENIX Security 2023}.
+
+\bibitem{alice2020shadowsocks} ``Alice,'' ``Bob,'' ``Carol,'' J. Beznazwy,
+A. Houmansadr, ``How China Detects and Blocks Shadowsocks,''
+\textit{IMC 2020}.
+
+\bibitem{frolov2020probe} S. Frolov, J. Wampler, E. Wustrow, ``Detecting
+Probe-resistant Proxies,'' \textit{NDSS 2020}.
+
+\bibitem{mazel2022ml} J. Mazel, M. Saudrais, A. Hervieu, ``ML-based tunnel
+detection and tunneled application classification,'' arXiv:2201.10371,
+2022.
+
+\bibitem{razooqi2025wavelet} M. Razooqi, A. Pekar, ``Binary VPN Traffic
+Detection Using Wavelet Features and Machine Learning,'' arXiv:2502.13804,
+2025.
+
+\bibitem{dowling2018crypto} B. Dowling, P. Rösler, J. Schwenk,
+``A Cryptographic Analysis of the WireGuard Protocol,'' \textit{ACNS 2018}.
+
+\bibitem{draper2016iscx} G. Draper-Gil, A. H. Lashkari, M. S. I. Mamun,
+A. A. Ghorbani, ``Characterization of Encrypted and VPN Traffic using
+Time-related Features,'' \textit{ICISSP 2016}. Dataset: ISCXVPN2016.
+
+\bibitem{tegant_amnezia_2024} ``Iran's escalation of VPN-blocking
+campaigns,'' Tegant blog and Amnezia issue tracker, 2024 (gray-literature
+operational reports cited as evidence of deployment, not as primary
+academic source).
 
 \bibitem{scapy} P. Biondi and the Scapy community, ``Scapy: Packet
-crafting for Python2 and Python3,'' \url{https://scapy.net}.
+crafting for Python,'' \url{https://scapy.net}.
 \end{thebibliography}
 
 \end{document}

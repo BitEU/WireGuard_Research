@@ -1,0 +1,395 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  breakatwhitespace=true,
+  columns=flexible,
+  keepspaces=true,
+  frame=single,
+  framerule=0pt,
+  backgroundcolor=\color{black!4},
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  aboveskip=4pt,
+  belowskip=4pt,
+}
+
+\begin{document}
+
+\title{Fingerprinting and Obfuscating WireGuard:\\
+A Practical Demonstration of Protocol Identification and udp2raw Evasion}
+
+\author{\IEEEauthorblockN{Steven Schiavone}
+\IEEEauthorblockA{\textit{Seidenberg School of CSIS} \\
+\textit{Pace University}\\
+New York, NY \\
+sschiavone@pace.edu}
+\and
+\IEEEauthorblockN{Nicholas Johannsen}
+\IEEEauthorblockA{\textit{Seidenberg School of CSIS} \\
+\textit{Pace University}\\
+New York, NY}
+}
+
+\maketitle
+
+\begin{abstract}
+WireGuard is widely deployed for its simplicity, performance, and modern
+cryptography. We show, however, that its over-the-wire framing is trivially
+identifiable: a constant four-byte header structure and three fixed-length
+handshake packets allow a passive observer to fingerprint a WireGuard session
+without decrypting a single byte. We deploy a WireGuard server on Oracle Cloud
+Infrastructure (OCI), connect a Kali Linux client through it, and use a Scapy
+sniffer of our own design to identify 102 WireGuard packets in a 25-second
+capture, including the handshake initiation and response. We then wrap the
+same tunnel in \textit{udp2raw} \texttt{faketcp} obfuscation. The tunnel
+continues to function (5/5 ICMP pings, 0\% loss to the inner peer) but the
+identical Scapy sniffer reports zero WireGuard packets. We conclude that
+WireGuard's straightforward design --- a feature in trusted networks ---
+becomes a liability under deep-packet-inspection (DPI) regimes, and that a
+small obfuscation layer is sufficient to defeat the trivial fingerprint.
+\end{abstract}
+
+\begin{IEEEkeywords}
+WireGuard, VPN, deep packet inspection, traffic obfuscation, udp2raw,
+Scapy, network forensics
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+A central tension of modern VPN design is that strong end-to-end cryptography
+does not, by itself, conceal the presence of a VPN. Censorship and
+surveillance regimes from corporate firewalls to nation-state DPI middleboxes
+typically do not attempt to break the encryption; they fingerprint the
+\textit{protocol} and drop or throttle the flow. WireGuard~\cite{donenfeld2017},
+prized in the research community for its small attack surface and modern
+constructions, has a particularly stark version of this problem: its packets
+follow a fixed and predictable layout that needs no machine learning to
+identify.
+
+This paper demonstrates the problem and a practical countermeasure. We deploy
+a complete lab environment, build a minimal Python/Scapy classifier to
+fingerprint WireGuard handshakes by their byte signature, and then evaluate
+the same classifier against a tunnel obfuscated with
+\textit{udp2raw}~\cite{wangyu2017udp2raw} in \texttt{faketcp} mode. The
+contribution is not novel cryptography but a clean reproduction of the gap
+between ``encrypted'' and ``unidentifiable.''
+
+\section{Background}
+
+\subsection{The WireGuard wire format}
+
+The WireGuard whitepaper~\cite{donenfeld2017} specifies four message types,
+each carried in a single UDP datagram. Every message begins with a one-byte
+type identifier and three reserved zero bytes:
+
+\begin{lstlisting}
++---------+--------------------+
+| type(1) | reserved zero (3) |  ...
++---------+--------------------+
+\end{lstlisting}
+
+The handshake messages are also \textit{fixed length}, summarized in
+Table~\ref{tab:wgtypes}.
+
+\begin{table}[h]
+\centering
+\caption{WireGuard UDP payload signature.}
+\label{tab:wgtypes}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Type byte & Message & UDP payload length \\
+\midrule
+0x01 & Handshake Initiation & 148 bytes \\
+0x02 & Handshake Response   &  92 bytes \\
+0x03 & Cookie Reply         &  64 bytes \\
+0x04 & Transport Data       & variable, $\geq 32$ bytes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The combination is unusually distinctive. Three concatenated checks ---
+``UDP datagram, first byte is one of $\{1,2,3\}$, next three bytes are zero,
+length is exactly 148/92/64'' --- yield a handshake fingerprint with negligible
+false-positive risk in normal traffic. No state, no machine learning, no
+heuristics; a 12-line classifier suffices.
+
+\subsection{udp2raw and traffic obfuscation}
+
+\textit{udp2raw}~\cite{wangyu2017udp2raw} is a single-binary tunnel that
+takes UDP datagrams on one side and re-emits them as crafted raw packets that
+imitate other protocols (TCP, ICMP, or fake-UDP). In \texttt{faketcp} mode,
+udp2raw performs a SYN/ACK handshake with a corresponding instance on the
+other side, then exchanges encrypted payloads inside what appears to be an
+ordinary long-running TCP session. The wrapped UDP datagrams --- including
+the WireGuard handshake messages we wish to hide --- never appear on the
+wire as UDP at all.
+
+We chose \texttt{faketcp} over the alternative modes because it produces the
+strongest disguise (it survives more middleboxes than ICMP or fake-UDP) and
+is widely deployed in the censorship-circumvention community.
+
+\section{Lab environment}
+
+The experimental setup, illustrated conceptually in Fig.~\ref{fig:topo},
+consists of three nodes:
+
+\begin{enumerate}
+  \item A WireGuard server on an OCI VM.\@ Oracle Linux 9.7 on aarch64
+        (VM.Standard.A1.Flex), public IP 158.101.122.42. WireGuard listens
+        on UDP/51820; for the obfuscated path, udp2raw listens on TCP/4096
+        and forwards locally to UDP/51820.
+  \item A Kali Linux 2025.3 client running in VirtualBox on a Windows 11
+        host. Network adapter set to NAT (10.0.2.15) since Wi-Fi bridging
+        is unreliable across most consumer Wi-Fi NICs. Internet egress is
+        through the Windows host.
+  \item A Scapy-based DPI tool running inside the Kali VM, sniffing the
+        VM's NAT interface. This is the ``passive observer'' position
+        from a censorship-modelling perspective.
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.95\linewidth}{\footnotesize\ttfamily
+\textbf{Direct path (DPI-visible):}\\
+~Kali wg client $\xrightarrow{\text{UDP/51820}}$ OCI wg server\\[3pt]
+\textbf{Obfuscated path (DPI-blind):}\\
+~Kali wg client $\xrightarrow{\text{lo:51821}}$ Kali udp2raw client\\
+~$\xrightarrow{\text{TCP/4096 (faketcp)}}$ OCI udp2raw server\\
+~$\xrightarrow{\text{lo:51820}}$ OCI wg server
+}}
+\caption{Two end-to-end paths under test. The wireguard interface and keys
+are identical in both cases; only the transport between client and server
+changes.}
+\label{fig:topo}
+\end{figure}
+
+The client maintains two WireGuard configurations (\texttt{wg-direct} and
+\texttt{wg-obfuscated}) using identical keys and identical inner addressing
+(10.66.66.2/24); only the \texttt{Endpoint} differs. This isolates the
+obfuscation as the sole independent variable.
+
+\subsection{Path MTU considerations}
+
+Stacking WireGuard inside udp2raw inside Ethernet introduces a non-trivial
+MTU constraint. Each layer subtracts overhead: WireGuard adds 80 bytes for
+its header, AEAD nonce, and Poly1305 tag; udp2raw \texttt{faketcp} adds
+roughly 60 bytes of TCP header and obfuscation framing. The default
+WireGuard MTU of 1420 bytes is therefore 80--100 bytes too large for the
+obfuscated path. Symptomatically, packets just under the link MTU are
+silently dropped by udp2raw with a \texttt{huge packet, data
+len=1472 (>=1375)} warning, and the faketcp ``connection'' is torn down by
+intermediate conntrack timeouts roughly every 17 seconds.
+
+We resolved this by setting \texttt{MTU = 1200} on the obfuscated WireGuard
+interface, well within udp2raw's effective payload budget. End-to-end
+ICMP through the tunnel then runs at $\sim$14\,ms RTT with 0\% loss across
+30-packet bursts.
+
+\section{The Scapy DPI classifier}
+
+Our classifier consists of two short Python files: a stateless predicate that
+maps a UDP payload to one of the four WireGuard message classes, and a
+sniffer that applies that predicate to live or recorded traffic. The complete
+predicate is reproduced in Listing~\ref{lst:classify}.
+
+\begin{lstlisting}[caption={The complete WireGuard fingerprint predicate, less than 25 lines.},label={lst:classify}]
+WG_TYPES = {
+    1: ("HANDSHAKE_INIT",     148),
+    2: ("HANDSHAKE_RESPONSE",  92),
+    3: ("COOKIE_REPLY",        64),
+    4: ("TRANSPORT_DATA",    None),
+}
+
+def classify(payload):
+    if len(payload) < 4:
+        return None
+    msg_type = payload[0]
+    if msg_type not in WG_TYPES \
+       or payload[1:4] != b"\x00\x00\x00":
+        return None
+    label, expected_len = WG_TYPES[msg_type]
+    if expected_len is not None:
+        if len(payload) != expected_len:
+            return None
+        return label, msg_type, True
+    if len(payload) < 24:
+        return None
+    return label, msg_type, False
+\end{lstlisting}
+
+The third tuple element distinguishes \textit{exact} matches (handshake
+packets that pass the strict length check) from \textit{shape} matches
+(transport-data packets that pass only the type+reserved check). To
+sanity-check the predicate, we wrote a self-test of eight synthetic
+payloads --- four valid messages of each type and four near-misses (truncated,
+wrong type byte, non-zero reserved bytes, and a type-1 message of incorrect
+length). All eight cases pass.
+
+The sniffer wraps Scapy's \texttt{sniff()} (or \texttt{rdpcap()} for offline
+analysis), filters to UDP, applies the predicate, and produces both a
+per-packet log and an aggregate summary. The orchestrator script
+\texttt{run\_demo.sh} captures a pcap with \texttt{tcpdump}, generates traffic
+through whichever WireGuard interface is currently up, and replays the pcap
+through the sniffer for the canonical evidence file.
+
+\section{Results}
+
+\subsection{Direct WireGuard: easily identified}
+
+With the \texttt{wg-direct} configuration active, we ran the orchestrator
+with a 25-second capture window. The handshake completed in 1 second,
+five-of-five pings succeeded, and the curl through the tunnel reported
+the correct origin IP (158.101.122.42).
+
+The DPI summary output from \texttt{wg\_dpi.py} on the captured pcap is
+reproduced in Listing~\ref{lst:baseline}.
+
+\begin{lstlisting}[caption={DPI run on the direct WireGuard path.},label={lst:baseline}]
+=== Summary ===
+Total WireGuard packets detected: 102
+  TRANSPORT_DATA       100
+  HANDSHAKE_INIT       1
+  HANDSHAKE_RESPONSE   1
+
+Top flows:
+  10.0.2.15:35004 -> 158.101.122.42:51820   58
+  158.101.122.42:51820 -> 10.0.2.15:35004   43
+\end{lstlisting}
+
+The handshake is unambiguously located. Per-packet output (omitted for space)
+shows the 148-byte initiation, the 92-byte response, the typical sequence of
+small (96--128~byte) keepalive-class transport packets, and bursts of
+1344--1456~byte packets corresponding to bulk traffic such as the curl
+response. None of this requires any state across packets.
+
+\subsection{udp2raw: indistinguishable from background TCP}
+
+With \texttt{wg-direct} torn down and \texttt{wg-obfuscated} brought up, we
+re-ran the same orchestrator with the BPF filter widened to capture all
+traffic on TCP/4096 (the udp2raw transport port). The faketcp handshake took
+11 seconds to settle; once established, ping again succeeded
+five-of-five at 0\% loss. The DPI summary is reproduced in
+Listing~\ref{lst:obfuscated}.
+
+\begin{lstlisting}[caption={DPI run on the udp2raw-obfuscated path.},label={lst:obfuscated}]
+=== Summary ===
+No WireGuard traffic detected.
+\end{lstlisting}
+
+The pcap is not empty: it contains tens of TCP segments on port 4096 with
+plausible sequence numbers and ACK behaviour. None of those segments contain
+a UDP payload starting \texttt{0x01 0x00 0x00 0x00}, none are 148/92/64
+bytes, and the WireGuard handshake messages are nowhere on the wire.
+
+The Scapy classifier, exactly as written in
+Listing~\ref{lst:classify}, reports zero matches. The functional VPN tunnel
+is intact end-to-end.
+
+\subsection{Comparison}
+
+Table~\ref{tab:results} contrasts the two runs. The defining observation is
+that all functional metrics --- ping success, end-to-end RTT --- are
+preserved or barely changed, while the DPI metric collapses entirely.
+
+\begin{table}[h]
+\centering
+\caption{End-to-end behaviour and observability of the two paths.}
+\label{tab:results}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Metric & Direct & udp2raw \\
+\midrule
+WireGuard packets identified                & 102 & 0 \\
+Handshake packets (INIT + RESPONSE)         & 2   & 0 \\
+Inner-tunnel ICMP success                   & 5/5 & 5/5 \\
+Inner-tunnel mean RTT                       & 33.9~ms & 23.1~ms \\
+Time to handshake                           & $<$1\,s & 11\,s \\
+Wire MTU on the wg interface                & 1420 & 1200 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+
+\subsection{What is and isn't shown}
+
+The fingerprint we exploit is not a vulnerability in WireGuard's
+cryptography. The session keys, the AEAD construction, and the noise-protocol
+handshake remain intact under both configurations. We exploit only that
+WireGuard does not attempt to be \textit{indistinguishable} from other
+traffic. This is by design: WireGuard's whitepaper~\cite{donenfeld2017}
+explicitly states that obfuscation against censorship is out of scope and
+should be handled by an external layer if needed.
+
+It is worth noting that the udp2raw obfuscation defeats only the
+\textit{passive} fingerprint we constructed. An adversary controlling
+endpoints between the udp2raw client and server could perform active probing
+(e.g., sending crafted SYN packets to TCP/4096 and observing replies) and
+likely identify the udp2raw shim itself. Defeating active probing requires
+domain-fronting or similar protocol-mimicry tools beyond udp2raw.
+
+\subsection{Implications}
+
+For the typical home or office WireGuard deployment --- where the goal is
+encryption and not concealment --- our result simply confirms an existing
+design property. For users in restrictive networks, the result has more
+weight: the same property that makes WireGuard easy to audit makes it easy
+to block. The widely-cited Great Firewall of China is documented to identify
+and block WireGuard handshakes, and other regimes are presumed to do the
+same. A 25-line Python script, one minute of capture, and one page of
+analysis yield enough signal to drop every WireGuard tunnel a national-scale
+DPI box might encounter --- absent obfuscation.
+
+\subsection{Reproducibility}
+
+All scripts, configurations, and evidence files used to produce this paper
+are available in the project repository. The single shell command
+\texttt{run\_demo.sh} reproduces the headline results in approximately
+50 seconds end-to-end on a clean Kali install. The two evidence files
+discussed above (\texttt{20260508-203817\_baseline-pcap.txt} and
+\texttt{20260508-203845\_udp2raw-pcap.txt}) are timestamped artifacts of the
+runs reported here.
+
+\section{Conclusion}
+
+WireGuard provides excellent confidentiality and integrity, but no
+unobservability. A passive observer with no decryption capability and a
+classifier of fewer than 25 lines reliably identifies WireGuard sessions in
+practice. Wrapping the tunnel in a small obfuscation layer ---
+udp2raw \texttt{faketcp} in our experiments --- removes that fingerprint
+without measurably degrading the user experience, at a small cost in MTU
+and a one-time handshake-establishment delay.
+
+For VPN users in restrictive network environments, a kernel-mode WireGuard
+tunnel without an obfuscation shim is, in effect, broadcasting that it is
+a VPN.\@ For VPN users who only require confidentiality on a trusted network,
+the unwrapped tunnel is sufficient and faster. The choice between the two is
+a deployment decision, and we hope this paper has made the underlying
+trade-off concrete.
+
+\begin{thebibliography}{00}
+\bibitem{donenfeld2017} J. A. Donenfeld, ``WireGuard: Next Generation Kernel
+Network Tunnel,'' \textit{NDSS Symposium 2017}, San Diego, CA, USA, 2017.
+
+\bibitem{wangyu2017udp2raw} ``udp2raw-tunnel: A tunnel which turns UDP
+traffic into encrypted UDP/FakeTCP/ICMP traffic,'' wangyu-, GitHub
+repository, \url{https://github.com/wangyu-/udp2raw}, accessed 2026-05-08.
+
+\bibitem{scapy} P. Biondi and the Scapy community, ``Scapy: Packet
+crafting for Python2 and Python3,'' \url{https://scapy.net}.
+\end{thebibliography}
+
+\end{document}

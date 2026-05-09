@@ -1,0 +1,5 @@
+- Need a 3 or 4 page report
+- Roughly six slides
+- In person demo preferred
+
+We deploy a WireGuard VPN server on an Oracle Cloud VM with an Ubuntu client running in VirtualBox on a Windows host. Using deep packet inspection, we demonstrate how easy it is to identify WireGuard traffic with Scapy and Wireguard/tshark. Then, we use udp2raw to demonstrate ways to make VPN traffic more obfuscated. For whatever research we need, I'm certain the Great Firewall of China has us covered.

@@ -43,7 +43,7 @@ MASTER     = ROOT / "master_set"
 EVIDENCE   = ROOT / "evidence" / "demo-runs"
 EVIDENCE.mkdir(parents=True, exist_ok=True)
 
-SERVER_IP = os.environ.get("SERVER_IP", "158.101.122.42")
+SERVER_IP = os.environ.get("SERVER_IP", "150.136.195.244")
 TCP_PORT  = 4096
 UDP_PORT  = 51820
 SSH_PORT  = 22
@@ -243,20 +243,26 @@ def scene1(live: Live):
     if not wait_for_advance(live):
         return False
 
-    # Bring up the tunnel
+    # Tear down BOTH interfaces so the next handshake is fresh and visible.
     subprocess.run(["wg-quick", "down", "wg-direct"],
                    capture_output=True, text=True)
-    run_streamed(["wg-quick", "up", "wg-direct"], live, max_seconds=10)
+    subprocess.run(["wg-quick", "down", "wg-obfuscated"],
+                   capture_output=True, text=True)
 
-    # Capture
+    # Start the capture FIRST so the handshake itself lands in the pcap.
     pcap = EVIDENCE / f"demo-bare-{int(time.time())}.pcap"
-    SCENE.append_cmd(f"# capturing 12 s of UDP/51820 -> {pcap.name}",
+    SCENE.append_cmd(f"# capturing 14 s of UDP/51820 -> {pcap.name}",
                      style="grey50")
     cap = subprocess.Popen(
-        ["timeout", "12", "tcpdump", "-i", IFACE, "-w", str(pcap),
+        ["timeout", "14", "tcpdump", "-i", IFACE, "-w", str(pcap),
          f"udp port {UDP_PORT}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # Animate a small progress while it runs; also generate traffic
+    time.sleep(1)  # let tcpdump bind before traffic starts
+
+    # Now bring up the tunnel inside the capture window
+    run_streamed(["wg-quick", "up", "wg-direct"], live, max_seconds=10)
+
+    # Generate inner traffic during the remaining capture window
     for i in range(12):
         live.update(render_layout(), refresh=True)
         if i == 1:
@@ -331,6 +337,8 @@ def scene2(live: Live):
     if not wait_for_advance(live):
         return False
 
+    subprocess.run(["wg-quick", "down", "wg-direct"],
+                   capture_output=True)
     subprocess.run(["wg-quick", "down", "wg-obfuscated"],
                    capture_output=True)
     run_streamed(["wg-quick", "up", "wg-obfuscated"], live, max_seconds=10)

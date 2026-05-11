@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CONFIG_SRC="${CONFIG_SRC:-/media/sf_Git/configs/lab-client.conf}"
-SERVER_IP="${SERVER_IP:-158.101.122.42}"
+SERVER_IP="${SERVER_IP:-150.136.195.244}"
 TCP_PORT="${TCP_PORT:-4096}"
 LOCAL_LISTEN_PORT="${LOCAL_LISTEN_PORT:-51821}"
 PSK="${PSK:-cyb623-wg-obfuscation-2026}"
@@ -48,13 +48,12 @@ sudo tee /etc/wireguard/wg-direct.conf >/dev/null <<EOF
 [Interface]
 PrivateKey = ${PEER_PRIV}
 Address = ${PEER_ADDR}
-DNS = 1.1.1.1, 9.9.9.9
 
 [Peer]
 PublicKey = ${PEER_PUB}
 PresharedKey = ${PEER_PSK}
 Endpoint = ${SERVER_IP}:51820
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = 10.66.66.0/24
 PersistentKeepalive = 25
 EOF
 sudo chmod 600 /etc/wireguard/wg-direct.conf
@@ -63,7 +62,6 @@ sudo tee /etc/wireguard/wg-obfuscated.conf >/dev/null <<EOF
 [Interface]
 PrivateKey = ${PEER_PRIV}
 Address = ${PEER_ADDR}
-DNS = 1.1.1.1, 9.9.9.9
 MTU = ${MTU}
 PostUp = ip route add ${SERVER_IP} via \$(ip route | awk '/default/ {print \$3; exit}')
 PostDown = ip route del ${SERVER_IP} 2>/dev/null || true
@@ -72,7 +70,7 @@ PostDown = ip route del ${SERVER_IP} 2>/dev/null || true
 PublicKey = ${PEER_PUB}
 PresharedKey = ${PEER_PSK}
 Endpoint = 127.0.0.1:${LOCAL_LISTEN_PORT}
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = 10.66.66.0/24
 PersistentKeepalive = 25
 EOF
 sudo chmod 600 /etc/wireguard/wg-obfuscated.conf

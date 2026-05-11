@@ -10,9 +10,9 @@ The probes are designed to be cheap (one or two packets each), deterministic,
 and harmless to a real TCP server (a real server will return RST or ignore).
 
 Run:
-    sudo python3 active_probe.py 158.101.122.42 4096
-    sudo python3 active_probe.py 158.101.122.42 22       # control: real TCP
-    sudo python3 active_probe.py 158.101.122.42 9999     # control: closed
+    sudo python3 active_probe.py 150.136.195.244 4096
+    sudo python3 active_probe.py 150.136.195.244 22       # control: real TCP
+    sudo python3 active_probe.py 150.136.195.244 9999     # control: closed
 
 Output is a verdict line and per-probe results, also written to
 /media/sf_Git/evidence/<ts>_active-probe_<host>_<port>.txt

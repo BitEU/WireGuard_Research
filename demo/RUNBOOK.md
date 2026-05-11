@@ -17,7 +17,7 @@ sudo bash /media/sf_Git/scripts/03_client_install.sh   # if not already
 Confirm the OCI server is up:
 
 ```bash
-ssh -i /media/sf_Git/creds/ssh-key-2026-05-08.key opc@158.101.122.42 \
+ssh -i /media/sf_Git/creds/ssh-key-2026-05-10.key opc@150.136.195.244 \
   "sudo systemctl is-active wg-quick@wg0 udp2raw-server"
 # both should print 'active'
 ```

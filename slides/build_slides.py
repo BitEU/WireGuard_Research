@@ -193,41 +193,19 @@ def build():
     _add_text(s, LMARGIN, 6.10, WIDTH, 0.35,
               "Seidenberg School of CSIS · Pace University · CYB623, May 2026",
               size=12, color=GREY)
-    _notes(s, """Hello, I'm Steven, this is Nicholas. We spent the semester building
-a small WireGuard setup and then trying to break it.
+    _notes(s, """Hi, I'm Steven, this is Nicholas. We spent the semester building and
+breaking a WireGuard deployment.
 
-Quick orientation before we dive in. WireGuard is a modern VPN — when
-you turn it on, your traffic goes through an encrypted tunnel to a server
-somewhere, and a network observer can't read what's inside. That's the
-"confidentiality" part, and WireGuard does it well.
+WireGuard is a modern VPN. It encrypts your traffic well, but it doesn't
+try to hide that you're running a VPN — that's an explicit design choice
+by its author. The question we're asking is whether the most popular
+tool people use to hide WireGuard actually hides it. The tool is called
+udp2raw. About 260,000 downloads, used in Iran and China, zero
+peer-reviewed analysis until this paper.
 
-The problem we're going to talk about is different. It's not about
-reading the contents. It's about whether a network observer can simply
-tell that you are USING a VPN at all, even without decrypting anything.
-In countries that block VPNs, that distinction is the whole game.
-
-The story has two parts.
-
-Part one: WireGuard is easy to spot on the wire. Every WireGuard packet
-has such a recognizable shape that you can write a detector in about
-twenty-five lines of Python. The Great Firewall of China actually does
-this in production.
-
-Part two: there's a popular open-source tool called udp2raw that's
-supposed to disguise WireGuard. It has been downloaded roughly two
-hundred and sixty thousand times. People in Iran and China rely on it.
-And here's the thing — nobody has ever published a peer-reviewed security
-analysis of it. Zero papers.
-
-So we did the analysis. We came up with two ways to detect WireGuard
-even when it's hiding inside udp2raw. One is "active" — we send a few
-test packets at the server and watch how it replies, and we can identify
-it in about eight and a half seconds. The other is "passive" — we just
-watch normal traffic going by, measure two simple properties of it, and
-a small machine-learning model tells WireGuard apart from regular web
-traffic with ninety-nine point nine percent accuracy.
-
-That's the talk. Let's get into it.""")
+Two results. An active attack: send five test packets, identify a
+udp2raw server in 8.5 seconds. A passive attack: watch traffic, measure
+two things about it, classifier hits 99.9% accuracy.""")
 
     # ============================================================
     # Slide 2 — Problem
@@ -261,41 +239,19 @@ That's the talk. Let's get into it.""")
               size=14, color=ACCENT, bold=True)
 
     _footer(s, 2, 0)
-    _notes(s, """Two things on this slide. First the technical observation, then a
-philosophical one that's important so we don't sound like we're attacking
-the WireGuard project.
+    _notes(s, """Every WireGuard packet starts with the same four bytes — a type byte
+that's always 1, 2, 3, or 4, followed by three zero bytes. The
+handshake packets are also fixed sizes: 148, 92, and 64 bytes. So you
+can identify WireGuard without decrypting anything, just by looking at
+the first four bytes and the length. Twenty-five lines of Python is the
+whole detector. The Wu et al. paper at USENIX Security 2023 confirms
+the Great Firewall does exactly this.
 
-The technical observation. Every WireGuard packet starts with the exact
-same four bytes. The first byte is a "message type" and it can only be
-one of four values: one, two, three, or four. The next three bytes are
-literally always zero. So if you're watching the network and you see a
-packet whose first byte is one of those four values and the next three
-are zero, that's already a really strong hint it's WireGuard.
-
-And then it gets easier. WireGuard's "handshake" — that's the initial
-back-and-forth when two computers set up the encrypted connection — uses
-packets of exactly fixed sizes: a hundred and forty-eight bytes, then
-ninety-two, then sixty-four. So you don't even need to decrypt anything.
-You just look at the first four bytes and the size of the packet, and
-you know.
-
-You can write this whole detector in twenty-five lines of Python. We
-re-implemented it ourselves as a baseline so we'd have an honest
-comparison point for the rest of the paper. And this isn't theoretical —
-a paper from USENIX Security 2023, by Wu and colleagues, confirms the
-Great Firewall of China does exactly this in production.
-
-Now the philosophical point, and this matters. We are NOT saying
-WireGuard has a vulnerability. The author of WireGuard, Jason Donenfeld,
-wrote in his original paper back in 2017 that hiding the existence of a
-VPN is explicitly not WireGuard's job. His position is that if you need
-to hide that you're running a VPN, you should put another tool on top of
-WireGuard to handle that.
-
-So the question we're actually asking is not "can you detect
-WireGuard?" — that's a solved problem. The question is, "can you
-detect WireGuard once someone has wrapped it inside the most popular
-hiding tool people actually use?" That tool is udp2raw, and that's the
+Important caveat: this is not a WireGuard vulnerability. Donenfeld's
+original 2017 paper explicitly says hiding the VPN's existence is out
+of scope — that's a job for a separate tool. The question isn't "can
+you detect WireGuard," it's "can you detect it once it's wrapped in
+the most popular hiding tool." That tool is udp2raw, which is the
 next slide.""")
 
     # ============================================================
@@ -367,50 +323,22 @@ next slide.""")
     ], size=15, line_spacing=1.20)
 
     _footer(s, 3, 0)
-    _notes(s, """Two boxes at the top of the slide. They're showing the two different
-ways a WireGuard client can talk to a WireGuard server in our lab. The
-encryption keys are identical in both setups; the only thing that
-changes is what the traffic LOOKS like to anyone watching the network.
+    _notes(s, """Two paths through our lab, same WireGuard keys both ways, only the
+outer transport differs. Direct path: WireGuard packets ride UDP
+directly — the path the Great Firewall already detects. Obfuscated
+path: udp2raw rewraps each WireGuard packet to look like a TCP segment
+on port 4096. udp2raw calls this "faketcp" — it's not a real TCP
+connection underneath, just shaped like one. TCP looks normal because
+it's what web browsers use.
 
-Left box: the "direct" path. WireGuard packets just go over UDP, which
-is one of the two basic ways data travels on the internet. UDP is what
-WireGuard normally uses. The problem is that this is what the Great
-Firewall already detects and blocks, because of the obvious fingerprint
-we just talked about.
+Why udp2raw specifically. Roughly 259,000 binary downloads — actual
+runs, not GitHub stars. Reportedly blocked at the ISP level in Iran
+(udp2raw issue #505, net4people thread #253). And zero peer-reviewed
+analysis: we searched USENIX, NDSS, IMC, FOCI, PETS, CCS. Nothing.
 
-Right box: the "obfuscated" path. This is where udp2raw comes in.
-udp2raw takes each WireGuard packet and re-wraps it to look like TCP
-instead. TCP is the other main way data travels on the internet — it's
-what your web browser uses for almost everything. The idea is that TCP
-traffic is so common and so normal-looking that nobody will notice your
-VPN hiding inside it. udp2raw calls this "faketcp" because it's not a
-real TCP connection underneath; it's just shaped like one.
-
-Now, why udp2raw specifically? A few reasons.
-
-One — it's the dominant tool of its kind. Two hundred and fifty-nine
-thousand downloads of the actual binary. That's not GitHub stars or
-people bookmarking it, that's people downloading it to run. There's also
-a fork for other platforms with another forty-one thousand downloads.
-
-Two — there's real-world evidence that governments are blocking it. An
-issue on the udp2raw GitHub from 2024 documents an Iranian ISP blocking
-all of its modes within seconds. There's a long-running discussion
-thread about Iran's deep packet inspection — that's the term for when a
-network operator looks at the contents of packets, not just where
-they're going — and udp2raw is one of the tools that gets blocked.
-
-Three, and this is the gap we're filling — nobody has academically
-analyzed it. We searched the major security conferences. USENIX, NDSS,
-IMC, FOCI, PETS, CCS. These are the venues where this kind of work
-gets published. Nothing on udp2raw. So this is genuinely an unstudied
-target.
-
-One last thing — you might wonder why we don't also test other tools
-like AmneziaWG or swgp-go. The answer is that those tools modify
-WireGuard itself; they're a different category of fix. udp2raw is the
-only big, popular, unstudied tool in the "wrap it generically" category,
-so we focused there.""")
+Other tools like AmneziaWG and swgp-go modify WireGuard itself — that's
+a different category. udp2raw is the only big, unstudied tool in the
+"wrap it generically" category, so that's our target.""")
 
     # ============================================================
     # Slide 4 — Methodology overview
@@ -472,51 +400,26 @@ so we focused there.""")
           size=12, color=GREY, space_after=2)
 
     _footer(s, 4, 0)
-    _notes(s, """Quick framing on this slide. There are two general ways to detect a
-hidden service on a network. "Active" means you send something at the
-server and watch how it responds. "Passive" means you don't send
-anything — you just watch traffic going by and look for patterns. We do
-both.
+    _notes(s, """Two attacks. "Active" means we send packets and watch the reply;
+"passive" means we just watch traffic going by. We didn't invent this
+pattern — the Xue et al. Distinguished Paper at USENIX Security 2022
+did it for OpenVPN. We apply the same template to WireGuard-in-udp2raw,
+which they didn't cover.
 
-We didn't invent this two-pronged approach. A team at the University of
-Michigan led by Diwen Xue published a paper at USENIX Security 2022 that
-won "Distinguished Paper" — that's the conference's top award — where
-they did exactly this for a different VPN called OpenVPN. We're applying
-their same playbook to WireGuard-plus-udp2raw, which their paper didn't
-cover.
+Left card, C1, active: five TCP probes, under nine seconds, same answer
+every time. Walking through the actual probes on the next slide.
 
-Left box, contribution one: the active prober. We send five carefully
-chosen TCP packets at the target server. Five packets total. The whole
-test takes under nine seconds, and we always get the same answer when
-we re-run it. I'll walk through the actual packets on the next slide.
+Right card, C2, passive: for each traffic flow — meaning one
+conversation between two computers — we compute two numbers and feed
+them to a Random Forest, which is a standard machine-learning model
+that learns rules from examples. The two numbers come from how the
+protocols are written: WireGuard pads every packet to the maximum size,
+and udp2raw acknowledges every wrapped packet one-for-one. Those are
+mechanical, not statistical.
 
-Right box, contribution two: the passive classifier. We just watch
-traffic and measure two things about each "flow." A flow is a
-conversation between two computers — one IP address talking to another
-on specific ports. So for every flow we see, we compute these two
-numbers, and a small machine learning model uses them to decide:
-WireGuard, or not?
-
-The two numbers are called "bulk_fraction" and "ack60_fraction." Don't
-worry about what they mean yet — slide six is dedicated to explaining
-them. The key thing is they're not random statistical patterns we got
-lucky with. They come directly from how WireGuard and udp2raw are
-written. WireGuard always pads its packets to the maximum size, and
-udp2raw sends back one acknowledgment packet for every data packet it
-receives. Those two implementation choices are essentially impossible to
-hide.
-
-The model we use is called a Random Forest. Think of it as a system
-that learns rules from examples — you give it a bunch of WireGuard
-flows and a bunch of normal flows, and it figures out the boundary
-between them. On our data, it's correct ninety-nine point nine percent
-of the time.
-
-For training data, we captured twenty-four WireGuard flows ourselves in
-the lab. For the "normal traffic" comparison, we used a public research
-dataset called ISCXVPN2016, which has over a thousand recordings of
-ordinary web browsing, video, email, chat, and so on. It's the standard
-dataset everyone uses for this kind of work.""")
+Trained on 24 WireGuard flows we captured ourselves, plus 1058 normal
+flows from ISCXVPN2016 — the standard public dataset for this kind of
+work.""")
 
     # ============================================================
     # Slide 5 — C1 results
@@ -577,60 +480,24 @@ dataset everyone uses for this kind of work.""")
               size=14, color=GREY)
 
     _footer(s, 5, 0)
-    _notes(s, """This is the active prober's results. Three columns — same server, three
-different ports. A "port" is just a number that identifies which
-service on a server you're talking to. Port twenty-two is real SSH,
-which is normal remote-login software running on the kernel — that's
-our "real TCP" control. Port four thousand ninety-six is where udp2raw
-is listening. Port nine thousand nine hundred ninety-nine is closed,
-nothing running there — that's our negative control.
+    _notes(s, """Three columns, same server, three ports. Port 22 is real SSH — our
+real-TCP control. Port 4096 is udp2raw. Port 9999 is closed — negative
+control. TCP terms in the table: SYN starts a connection, SYN-ACK
+accepts it, RST rejects, FIN closes.
 
-Quick TCP refresher so the table reads cleanly. When two computers want
-to start a TCP connection, the client sends a "SYN" packet — that's
-short for synchronize, it's basically "hello, want to talk?" The server
-replies with a "SYN-ACK" — "hello back, sure." That's the start of every
-TCP connection. There's also "RST" — short for reset — which is what a
-server sends to say "no, go away." And "FIN" — for finish — which means
-"I'm done talking." Those four — SYN, SYN-ACK, RST, FIN — are most of
-what you need to read this table.
+The two orange "silent" probes don't help: udp2raw answers SYN
+because that's the disguise, and the kernel — not udp2raw — generates
+the RST on the bogus ACK.
 
-Five rows in the table, one per probe. Look at the orange "silent"
-entries in the middle column.
+The signal is the other three. Probe 2 is a SYN with 32 bytes of
+payload. Probe 4 is a SYN with an unusual TCP option. Probe 5 is a FIN
+to a port with no connection. A real Linux kernel answers all three.
+udp2raw drops all three because its parser was written for one specific
+TCP shape. Count silent responses: real TCP scores 0, udp2raw scores 3.
 
-The first probe is just a normal SYN. udp2raw answers it. Of course it
-does — that's the whole point of the disguise. If it didn't answer SYNs
-it wouldn't look like a TCP server at all.
-
-The third probe is a bogus ACK — we pretend to acknowledge a connection
-that doesn't exist. udp2raw also answers this one, but here's the
-subtle reason: udp2raw itself doesn't generate the response, the
-underlying Linux kernel does, because udp2raw didn't recognize the
-packet and the kernel emits its own reset by default. So probe one and
-probe three don't help us discriminate.
-
-The interesting ones are probes two, four, and five. Probe two is a SYN
-packet with thirty-two bytes of data attached. That's unusual but legal,
-and a real Linux kernel always replies. Probe four uses an unusual TCP
-option — specifically a "window scale" of fourteen, which is at the edge
-of what's allowed. A real kernel still replies. Probe five is a FIN
-packet — a "goodbye" packet — sent to a port where no conversation was
-ever started. Real kernels reply to this too.
-
-udp2raw replies to none of them. Silent, silent, silent. That's the
-giveaway. udp2raw was written to handle one specific TCP pattern, and
-anything outside that pattern, it just drops on the floor. A real Linux
-kernel never drops these — it always reacts.
-
-So our rule is simple: count how many of probes two, four, and five
-were silent. If it's three out of three, it's udp2raw. Real TCP scores
-zero out of three. Done.
-
-The bottom of the table is the timing. Half a second for real TCP. Eight
-and a half seconds for udp2raw. The reason udp2raw takes longer is we
-wait the full timeout on each of the silent probes. The closed port
-takes fifteen and a half because there's nothing replying to anything.
-And we ran this against udp2raw five separate times — same verdict every
-time. Five out of five.""")
+Timing: half a second for real TCP, 8.5 seconds for udp2raw (we wait
+out timeouts on the silent probes), 15.5 for the closed port. Same
+verdict 5 out of 5 trials.""")
 
     # ============================================================
     # Slide 6 — C2 features (table + scatter)
@@ -706,64 +573,34 @@ time. Five out of five.""")
               size=11, color=ACCENT)
 
     _footer(s, 6, 0)
-    _notes(s, """OK this is the heart of the passive classifier. Two numbers we measure
-about every flow.
+    _notes(s, """Two features. First: bulk_fraction is the share of packets in a flow
+that are big — 1200 bytes or more. The reason it works: WireGuard pads
+every packet up to near the MTU, the maximum packet size on the link,
+about 1500 bytes. Web browsers don't. WireGuard flows are 55% big
+packets; normal traffic is 2%. The "Cohen's d" column is a standard
+measure of how cleanly two groups separate; anything over 0.8 is "large,"
+and we get 3.83.
 
-First feature, called "bulk_fraction." This is just the fraction of
-packets in the flow that are "big." We defined "big" as twelve hundred
-bytes or more. The reason is something called MTU — short for Maximum
-Transmission Unit, which is the largest packet size a network link will
-carry, usually around fifteen hundred bytes. WireGuard pads every single
-one of its packets up to right near that maximum. Web browsers don't do
-this. A typical web flow has a mix of big packets when you're
-downloading something and tiny packets the rest of the time. So:
+Second feature: ack60_fraction, the share of 60-byte TCP ACK packets.
+Normal TCP uses "delayed ACK" — one acknowledgment per two data
+packets, so about 33% ACKs. udp2raw breaks this. It wraps each
+WireGuard packet as one separate TCP segment, the kernel ACKs each
+arrival individually, and the ACK fraction climbs. We measure 30% for
+WireGuard-in-udp2raw vs. 7% for normal traffic. Cohen's d of 1.27 —
+still a large effect.
 
-WireGuard flows: about fifty-five percent of their packets are big.
-Normal background traffic: about two percent. That's a huge gap.
+Scatter on the right: 1082 flows total. Orange is WireGuard, grey is
+normal traffic. They barely overlap. All 24 WireGuard flows have
+bulk_fraction at least 0.32. Only 4 of 1058 normal flows fall anywhere
+near the WireGuard cluster.
 
-The table also lists something called "Cohen's d." This is a statistics
-term that measures how cleanly separated two groups of numbers are. It's
-on a scale where zero point eight is already considered a "large"
-difference. For bulk_fraction we get three point eight three — almost
-five times the threshold for "large." This is a giant, obvious
-difference, not a subtle one we squeezed out with statistics.
-
-Second feature, "ack60_fraction." This one's a little more intricate so
-bear with me. When you make a TCP connection, every time you send data,
-the other side sends back a tiny acknowledgment packet — sixty bytes,
-usually. These are called ACKs. In normal bulk file transfers, the
-receiving side waits and sends one ACK for every TWO data packets, to
-save bandwidth. That's called "delayed ACK." So normal TCP has about
-thirty-three percent ACKs.
-
-But udp2raw breaks this. udp2raw takes each WireGuard packet and wraps
-it as one separate TCP segment. The receiving computer's kernel sees
-these as separate arrivals and ACKs each one individually — no delayed
-ACK happens. So you end up with one ACK per data packet, fifty-fifty,
-and the ACK fraction climbs.
-
-For WireGuard-in-udp2raw, ack60_fraction is about thirty percent. For
-ordinary traffic, it's about seven percent. Cohen's d of one point two
-seven — still a large effect.
-
-The scatter plot on the right is showing all one thousand eighty-two
-flows we have, plotted on these two axes. Orange dots are WireGuard.
-Grey dots are normal traffic. You can see they live in completely
-different regions of the plot. They barely overlap. All twenty-four of
-our WireGuard flows have a bulk_fraction of at least zero point three
-two. Out of one thousand fifty-eight normal flows, only four are
-anywhere near the WireGuard cluster.
-
-Bottom-left in orange, a quick aside about scientific honesty. Going in,
-I expected a different feature called "dominant_size_fraction" — meaning
-how often the most-common packet size shows up — to be the smoking gun.
-Turned out the data went the opposite direction from what I expected.
-The reason is that the public dataset contains lots of idle "keepalive"
-flows where every packet is literally identical, so they score higher on
-that feature than WireGuard does. The real-world data corrected my bad
-guess. We dropped that feature and three others, and the two that
-survived are the ones grounded in actual protocol mechanics, not in
-intuition.""")
+Orange note bottom-left, brief story on scientific honesty. Going in, I
+expected dominant_size_fraction — how concentrated the most common
+packet size is — to be the killer feature. The real data inverted that:
+the public dataset has lots of idle keepalive flows where every packet
+is identical, so they score higher than WireGuard does. We dropped that
+feature. The two that survived are the ones grounded in protocol
+mechanics, not intuition.""")
 
     # ============================================================
     # Slide 7 — C2 classifier results
@@ -833,60 +670,29 @@ intuition.""")
                          PLOT_W, PLOT_H)
 
     _footer(s, 7, 0)
-    _notes(s, """OK so we took those two features from the last slide and trained the
-classifier. Here are the results.
+    _notes(s, """Headline numbers, with definitions since some of these terms aren't
+universal.
 
-Before reading the numbers, let me quickly define them, because each one
-measures something different.
+Accuracy 99.91% — overall fraction labeled correctly.
+Precision 1.000 — when we say "WireGuard," we're always right. Zero
+false alarms on 1058 normal flows.
+Recall 0.958 — we catch 23 of the 24 actual WireGuard flows. One slips
+through.
+ROC AUC 1.000 — a single number from 0.5 (random) to 1.0 (perfect)
+that scores the classifier across all sensitivity settings. We're at
+the ceiling.
 
-"Accuracy" is the simplest — out of every flow we tested, how many did
-we label correctly? We got ninety-nine point nine one percent. So out of
-about a thousand flows, we mislabeled around one.
+Small table below: adding more features doesn't help. The 8-feature
+Random Forest catches one fewer WireGuard flow than the 2-feature
+version — extra features added noise, not signal. Logistic regression
+(LR), which is a simpler model that draws a straight line between the
+classes, catches everything but pays with 3% false alarms because the
+real boundary isn't straight.
 
-"Precision" answers the question: when the classifier says "this IS
-WireGuard," how often is it right? We got one point zero. That's perfect.
-Zero false alarms. We never accused a normal web flow of being WireGuard.
-
-"Recall" is the opposite question: of all the real WireGuard flows that
-existed, how many did we catch? Zero point nine five eight. That means
-we caught twenty-three of the twenty-four WireGuard flows. One slipped
-through. So we're slightly conservative — we miss the occasional one,
-but we never falsely accuse.
-
-"ROC AUC" is the trickiest one to explain. Imagine you could tune the
-classifier to be more paranoid — willing to call more flows WireGuard —
-or more relaxed. Each setting trades false alarms for missed WireGuards.
-ROC AUC is a single number that summarizes how well the classifier does
-across ALL of those tunings at once. The scale is zero point five for
-random guessing, one point zero for a perfect classifier. We got
-one point zero. Couldn't ask for better.
-
-Now the smaller table below — this is showing what happens if we add
-more features. The "RF, two features" row is the headline classifier we
-just discussed. The "RF, eight features" row added six more measurements:
-things like packet-size variety, how concentrated the sizes are, how
-fast packets are flowing, and so on. You'd think more information means
-better results. It doesn't. Recall actually drops a tiny bit — we catch
-twenty-two flows instead of twenty-three. The extra features added noise
-without adding signal. The data was telling us "those two features were
-enough."
-
-"LR" in the third row stands for Logistic Regression, which is a simpler
-type of model than Random Forest — it just tries to draw a straight line
-between the two groups. It catches every single WireGuard flow but it
-also raises about three percent false alarms, because the boundary
-between the two groups isn't actually a straight line.
-
-The pictures on the right. The top one is a "confusion matrix" — it's a
-two-by-two grid showing how many WireGuard flows got correctly labeled
-as WireGuard, how many normal flows got correctly labeled as normal,
-and the mistakes in the other two corners. Almost everything is on the
-diagonal, which means almost everything is correct.
-
-The bottom picture is the "ROC curve" — that's where the ROC AUC number
-comes from. The curve hugs the top-left corner of the plot, which is
-what a near-perfect classifier looks like. A diagonal line through the
-middle would mean random guessing. We're nowhere near that.""")
+Right side. Confusion matrix on top — that's the 2x2 grid of correct
+and incorrect labels. Almost everything sits on the diagonal. ROC curve
+on the bottom hugs the top-left corner, which is the shape of a
+near-perfect classifier.""")
 
     # ============================================================
     # Slide 8 — Related work and limitations
@@ -923,68 +729,22 @@ middle would mean random guessing. We're nowhere near that.""")
     ], size=13, line_spacing=1.16, space_after=6)
 
     _footer(s, 8, 0)
-    _notes(s, """This slide does two things. The left side puts us in conversation with
-the existing research, so you know we didn't reinvent the wheel. The
-right side is us being honest about what we did NOT do.
+    _notes(s, """Lit positioning so the audience knows we read. The Xue group at
+Michigan has the dominant line. Their 2022 OpenVPN paper is our
+methodology template. Their 2024 paper detects nested TLS handshakes —
+doesn't fire on WireGuard because WireGuard doesn't use TLS. Their 2025
+NDSS paper uses cross-layer round-trip-time anomalies — attenuates on
+short UDP flows like ours. So those protocol-agnostic methods don't
+already solve the WireGuard-in-udp2raw case. Protocol-specific
+structural features remain the available approach.
 
-Left side. The dominant research group in this area is at the University
-of Michigan, led by Diwen Xue. They have three relevant papers.
-
-Their 2022 paper at USENIX Security broke obfuscated OpenVPN. That's
-where we got our two-stage active-plus-passive methodology. OpenVPN is
-a different VPN than WireGuard, and the specific attacks don't carry
-over, but the playbook does.
-
-Their 2024 paper looks for nested encryption handshakes — basically,
-when a tool tries to disguise traffic as HTTPS, there's often a real
-TLS handshake hidden inside. They look for that. It doesn't work
-against WireGuard, because WireGuard doesn't use TLS at all. There's
-no nested handshake to find.
-
-Their 2025 paper at NDSS uses timing differences between layers of the
-network stack — basically measuring round-trip times at different
-levels and looking for inconsistencies. It works well on long,
-high-bandwidth connections. Our captures are short and use UDP, where
-that timing signal is weak. So that approach doesn't really apply to
-our case either.
-
-The bottom line is: those general-purpose techniques exist, but none of
-them solve the WireGuard-in-udp2raw case specifically. So the
-protocol-specific approach we took — features that come from how
-WireGuard and udp2raw are actually written — is the available
-approach.
-
-We also cite Wu et al. on the Great Firewall's entropy filter, and
-older work on Shadowsocks and TLS-based circumvention tools. That gives
-us the broader context.
-
-Right side. What we are NOT claiming.
-
-One — we ran this in a lab, with one client and one server. We don't
-have data from actual internet service providers at scale. So we can't
-say "this would work on every network in the world." It's possible some
-of our signals weaken in environments we didn't test.
-
-Two — we tested one specific version of udp2raw, the February 2023
-release. There are forks of udp2raw with slightly different behavior
-that we didn't test.
-
-Three — both of our attacks could be defeated by patching udp2raw. If
-the maintainer added delayed-ACK behavior and recommended a smaller
-WireGuard packet size, our passive classifier would lose most of its
-edge. If they made the TCP emulation more thorough, our active prober
-would lose its edge too. We're describing the current state of the
-tool, not making a permanent claim.
-
-Four — the active prober's third probe, the bogus ACK, is mildly
-hostile. In a real deployment you'd only fire that one at hosts you
-already suspect.
-
-Five — we didn't compare against the other obfuscation tools like
-AmneziaWG, swgp-go, or wstunnel. That's left for future work.
-
-The point of this slide is to be honest about scope so people can trust
-the parts we DID prove.""")
+Right side, what we are NOT claiming. Single client and server, no
+ISP-scale data. One version of udp2raw — later forks may differ. Both
+attacks are defeatable by a maintainer who patches the tool — delayed
+ACK plus a smaller WireGuard MTU weakens C2. The bogus-ACK probe is
+mildly hostile, so an adversary would fire it only at already-suspected
+hosts. And we didn't compare against AmneziaWG, swgp-go, or wstunnel —
+future work.""")
 
     # ============================================================
     # Slide 9 — Takeaways
@@ -1017,43 +777,25 @@ the parts we DID prove.""")
               size=12, color=GREY)
 
     _footer(s, 9, 0)
-    _notes(s, """Four takeaways. If you remember nothing else from this talk, remember
-these.
+    _notes(s, """Four takeaways.
 
-Number one. WireGuard's packets are easy to recognize on the network.
-That's not news — researchers and the Great Firewall have known this
-for years. We re-built the detector ourselves, in twenty-five lines of
-Python, just so we have a fair baseline to compare against.
+One. WireGuard's wire format leaks. Known result; we re-implement it as
+our baseline.
 
-Number two. The most popular tool people use to hide WireGuard — udp2raw,
-which has been downloaded a quarter million times — doesn't actually
-hide it well. You can spot it actively in eight and a half seconds by
-sending five test packets. Or you can spot it passively, just watching
-traffic, with a tiny machine-learning model that's right essentially a
-hundred percent of the time. Take your pick.
+Two. udp2raw doesn't actually fix it. 8.5 seconds with the five-packet
+prober, or two passive features at AUC 1.0. Pick your weapon.
 
-Number three. These results are not statistical flukes or lucky
-patterns we found in one dataset. Both detectors come from how the
-software is fundamentally written. WireGuard always pads its packets to
-the maximum size — that's a deliberate design choice in the protocol.
-udp2raw always acknowledges every wrapped packet one-for-one, because
-that's how its wrapping mechanism works. And udp2raw silently drops
-weird TCP packets because the person who wrote it only thought about
-the one specific TCP pattern. These are mechanical consequences of the
-code, not statistical accidents — so they should transfer to other
-networks and other situations.
+Three. Not a statistical fluke. WireGuard pads to MTU because that's
+its design. udp2raw acks 1:1 because that's how it wraps. udp2raw drops
+unfamiliar TCP shapes because its parser was written for one shape.
+Mechanical consequences, not accidents.
 
-Number four. The defenses are not hard. If the udp2raw author added
-delayed acknowledgments, and recommended users set a smaller WireGuard
-packet size, the passive classifier mostly stops working. If they made
-the TCP emulation more thorough — actually responding to weird probes
-the way a real Linux kernel does — the active prober stops working.
-We describe both fixes in the paper. We didn't actually write the patch
-ourselves and submit it upstream. That's a pull request someone else
-can write.
+Four. Defenses are obvious. Delayed ACK plus a smaller WireGuard MTU
+kills C2. More conformant TCP emulation kills C1. We sketch both in the
+paper but didn't patch the upstream tool. Somebody else's pull request
+to write.
 
-That's the talk. Happy to take questions, and we have a live demo
-ready if there's interest.""")
+Happy to take questions. Live demo ready if there's interest.""")
 
     # ============================================================
     # Patch footers with actual total

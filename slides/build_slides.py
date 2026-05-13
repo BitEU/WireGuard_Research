@@ -11,6 +11,7 @@ Run:
     python build_slides.py
 """
 import os
+from datetime import datetime, timezone
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
@@ -193,19 +194,18 @@ def build():
     _add_text(s, LMARGIN, 6.10, WIDTH, 0.35,
               "Seidenberg School of CSIS · Pace University · CYB623, May 2026",
               size=12, color=GREY)
-    _notes(s, """Hi, I'm Steven, this is Nicholas. We spent the semester building and
-breaking a WireGuard deployment.
+    _notes(s, """Setup
+  • WireGuard = modern VPN. Encrypts well, but doesn't try to hide that it IS a VPN.
+  • Hiding the VPN is explicitly out of scope per Donenfeld's 2017 paper.
+  • Question: does the most popular hiding tool actually hide it?
 
-WireGuard is a modern VPN. It encrypts your traffic well, but it doesn't
-try to hide that you're running a VPN — that's an explicit design choice
-by its author. The question we're asking is whether the most popular
-tool people use to hide WireGuard actually hides it. The tool is called
-udp2raw. About 260,000 downloads, used in Iran and China, zero
-peer-reviewed analysis until this paper.
+The tool: udp2raw
+  • Used in Iran and China for censorship circumvention.
+  • Zero peer-reviewed analysis before this paper.
 
-Two results. An active attack: send five test packets, identify a
-udp2raw server in 8.5 seconds. A passive attack: watch traffic, measure
-two things about it, classifier hits 99.9% accuracy.""")
+Two results we'll show
+  • Active attack: 5 test packets, identifies udp2raw server in 8.5 s.
+  • Passive attack: 2 traffic features, classifier at 99.9% accuracy.""")
 
     # ============================================================
     # Slide 2 — Problem
@@ -239,20 +239,19 @@ two things about it, classifier hits 99.9% accuracy.""")
               size=14, color=ACCENT, bold=True)
 
     _footer(s, 2, 0)
-    _notes(s, """Every WireGuard packet starts with the same four bytes — a type byte
-that's always 1, 2, 3, or 4, followed by three zero bytes. The
-handshake packets are also fixed sizes: 148, 92, and 64 bytes. So you
-can identify WireGuard without decrypting anything, just by looking at
-the first four bytes and the length. Twenty-five lines of Python is the
-whole detector. The Wu et al. paper at USENIX Security 2023 confirms
-the Great Firewall does exactly this.
+    _notes(s, """Why WireGuard is easy to spot
+  • First byte = message type, always 1, 2, 3, or 4.
+  • Next 3 bytes = always zero.
+  • Handshake packets = fixed sizes: 148, 92, 64 bytes.
+  • → Identify WireGuard from first 4 bytes + packet length. No decryption needed.
+  • 25-line Python detector is the whole thing.
+  • Wu et al., USENIX Security 2023: Great Firewall does exactly this.
 
-Important caveat: this is not a WireGuard vulnerability. Donenfeld's
-original 2017 paper explicitly says hiding the VPN's existence is out
-of scope — that's a job for a separate tool. The question isn't "can
-you detect WireGuard," it's "can you detect it once it's wrapped in
-the most popular hiding tool." That tool is udp2raw, which is the
-next slide.""")
+Important caveat — not a vulnerability
+  • Donenfeld's 2017 paper says hiding the VPN's existence is out of scope.
+  • That's a job for a separate tool on top.
+  • Real question: can you detect WireGuard once it's wrapped in the popular hiding tool?
+  • → That tool is udp2raw. Next slide.""")
 
     # ============================================================
     # Slide 3 — udp2raw and the literature gap
@@ -323,22 +322,20 @@ next slide.""")
     ], size=15, line_spacing=1.20)
 
     _footer(s, 3, 0)
-    _notes(s, """Two paths through our lab, same WireGuard keys both ways, only the
-outer transport differs. Direct path: WireGuard packets ride UDP
-directly — the path the Great Firewall already detects. Obfuscated
-path: udp2raw rewraps each WireGuard packet to look like a TCP segment
-on port 4096. udp2raw calls this "faketcp" — it's not a real TCP
-connection underneath, just shaped like one. TCP looks normal because
-it's what web browsers use.
+    _notes(s, """Two paths in our lab (same WG keys, only the outer transport differs)
+  • Direct: WireGuard over UDP. What the Great Firewall already blocks.
+  • Obfuscated: udp2raw rewraps each WG packet as a TCP segment on port 4096.
+  • "faketcp" = shaped like TCP but not a real TCP connection.
+  • Why TCP? Looks normal — it's what web browsers use.
 
-Why udp2raw specifically. Roughly 259,000 binary downloads — actual
-runs, not GitHub stars. Reportedly blocked at the ISP level in Iran
-(udp2raw issue #505, net4people thread #253). And zero peer-reviewed
-analysis: we searched USENIX, NDSS, IMC, FOCI, PETS, CCS. Nothing.
+Why udp2raw specifically
+  • ~259,000 binary downloads (actual runs, not GitHub stars).
+  • Reportedly blocked at ISP level in Iran (issue #505, net4people #253).
+  • Zero peer-reviewed analysis. Searched USENIX, NDSS, IMC, FOCI, PETS, CCS.
 
-Other tools like AmneziaWG and swgp-go modify WireGuard itself — that's
-a different category. udp2raw is the only big, unstudied tool in the
-"wrap it generically" category, so that's our target.""")
+Why not other tools?
+  • AmneziaWG, swgp-go = modify WireGuard itself. Different category.
+  • udp2raw = only big, unstudied tool in the "wrap it generically" category.""")
 
     # ============================================================
     # Slide 4 — Methodology overview
@@ -400,26 +397,26 @@ a different category. udp2raw is the only big, unstudied tool in the
           size=12, color=GREY, space_after=2)
 
     _footer(s, 4, 0)
-    _notes(s, """Two attacks. "Active" means we send packets and watch the reply;
-"passive" means we just watch traffic going by. We didn't invent this
-pattern — the Xue et al. Distinguished Paper at USENIX Security 2022
-did it for OpenVPN. We apply the same template to WireGuard-in-udp2raw,
-which they didn't cover.
+    _notes(s, """Two attacks, definitions
+  • Active = send packets, watch the reply.
+  • Passive = just watch traffic going by.
+  • Template from Xue et al., USENIX Security 2022 Distinguished Paper (did OpenVPN, not WireGuard).
 
-Left card, C1, active: five TCP probes, under nine seconds, same answer
-every time. Walking through the actual probes on the next slide.
+C1 — Active (left card)
+  • 5 TCP probes, under 9 seconds.
+  • Same answer every time. Details next slide.
 
-Right card, C2, passive: for each traffic flow — meaning one
-conversation between two computers — we compute two numbers and feed
-them to a Random Forest, which is a standard machine-learning model
-that learns rules from examples. The two numbers come from how the
-protocols are written: WireGuard pads every packet to the maximum size,
-and udp2raw acknowledges every wrapped packet one-for-one. Those are
-mechanical, not statistical.
+C2 — Passive (right card)
+  • Flow = one conversation between two computers.
+  • For each flow, compute 2 numbers, feed to a Random Forest.
+  • Random Forest (RF) = standard ML model that learns rules from examples.
+  • Features are mechanical, not statistical:
+      – WireGuard pads every packet to max size.
+      – udp2raw acks every wrapped packet 1:1.
 
-Trained on 24 WireGuard flows we captured ourselves, plus 1058 normal
-flows from ISCXVPN2016 — the standard public dataset for this kind of
-work.""")
+Training data
+  • 24 WireGuard flows we captured ourselves.
+  • 1058 normal flows from ISCXVPN2016 (standard public dataset for this work).""")
 
     # ============================================================
     # Slide 5 — C1 results
@@ -480,24 +477,34 @@ work.""")
               size=14, color=GREY)
 
     _footer(s, 5, 0)
-    _notes(s, """Three columns, same server, three ports. Port 22 is real SSH — our
-real-TCP control. Port 4096 is udp2raw. Port 9999 is closed — negative
-control. TCP terms in the table: SYN starts a connection, SYN-ACK
-accepts it, RST rejects, FIN closes.
+    _notes(s, """Setup — three columns, same server, three ports
+  • TCP/22 = real SSH (real-TCP control).
+  • TCP/4096 = udp2raw.
+  • TCP/9999 = closed (negative control).
 
-The two orange "silent" probes don't help: udp2raw answers SYN
-because that's the disguise, and the kernel — not udp2raw — generates
-the RST on the bogus ACK.
+TCP terms for the table
+  • SYN starts a connection. SYN-ACK accepts. RST rejects. FIN closes.
 
-The signal is the other three. Probe 2 is a SYN with 32 bytes of
-payload. Probe 4 is a SYN with an unusual TCP option. Probe 5 is a FIN
-to a port with no connection. A real Linux kernel answers all three.
-udp2raw drops all three because its parser was written for one specific
-TCP shape. Count silent responses: real TCP scores 0, udp2raw scores 3.
+Probes that DON'T discriminate (answered by both)
+  • P1 (SYN): udp2raw answers — that's the disguise.
+  • P3 (bogus ACK): kernel (not udp2raw) generates the RST.
 
-Timing: half a second for real TCP, 8.5 seconds for udp2raw (we wait
-out timeouts on the silent probes), 15.5 for the closed port. Same
-verdict 5 out of 5 trials.""")
+The signal — probes 2, 4, 5
+  • P2: SYN with 32 bytes of payload.
+  • P4: SYN with unusual TCP option.
+  • P5: FIN to a port with no connection.
+  • Real Linux kernel answers all three. udp2raw drops all three.
+  • udp2raw's parser was written for one TCP shape; anything else, it ignores.
+
+Rule
+  • Count silent responses among {P2, P4, P5}.
+  • Real TCP = 0 silent. udp2raw = 3 silent.
+
+Timing
+  • Real TCP: 0.5 s.
+  • udp2raw: 8.5 s (we wait out timeouts on the silent probes).
+  • Closed port: 15.5 s.
+  • Same verdict 5/5 trials.""")
 
     # ============================================================
     # Slide 6 — C2 features (table + scatter)
@@ -573,34 +580,32 @@ verdict 5 out of 5 trials.""")
               size=11, color=ACCENT)
 
     _footer(s, 6, 0)
-    _notes(s, """Two features. First: bulk_fraction is the share of packets in a flow
-that are big — 1200 bytes or more. The reason it works: WireGuard pads
-every packet up to near the MTU, the maximum packet size on the link,
-about 1500 bytes. Web browsers don't. WireGuard flows are 55% big
-packets; normal traffic is 2%. The "Cohen's d" column is a standard
-measure of how cleanly two groups separate; anything over 0.8 is "large,"
-and we get 3.83.
+    _notes(s, """Feature 1 — bulk_fraction
+  • Share of packets in a flow that are "big" (≥1200 bytes).
+  • Why it works: WireGuard pads every packet up to near MTU (~1500 B).
+  • MTU (or Maximum Transmission Unit)= max packet size the link will carry.
+  • WireGuard: 55% big packets. Normal: 2%.
+  • Cohen's d = 3.83.
+  • Cohen's d = "A measurement that quantifies the difference between two averages in units of standard deviation" Or, how cleanly two groups separate. Over 0.8 is "large." We have 3.83.
 
-Second feature: ack60_fraction, the share of 60-byte TCP ACK packets.
-Normal TCP uses "delayed ACK" — one acknowledgment per two data
-packets, so about 33% ACKs. udp2raw breaks this. It wraps each
-WireGuard packet as one separate TCP segment, the kernel ACKs each
-arrival individually, and the ACK fraction climbs. We measure 30% for
-WireGuard-in-udp2raw vs. 7% for normal traffic. Cohen's d of 1.27 —
-still a large effect.
+Feature 2 — ack60_fraction
+  • Share of 60-byte TCP ACK packets.
+  • Normal TCP uses "delayed ACK" — 1 ACK per 2 data packets, so ~33% ACKs.
+  • udp2raw breaks this: each WG packet wrapped as 1 separate TCP segment.
+  • Kernel ACKs each arrival individually → ACK fraction climbs.
+  • WG-in-udp2raw: 30%. Normal: 7%. Cohen's d = 1.27 (still large).
 
-Scatter on the right: 1082 flows total. Orange is WireGuard, grey is
-normal traffic. They barely overlap. All 24 WireGuard flows have
-bulk_fraction at least 0.32. Only 4 of 1058 normal flows fall anywhere
-near the WireGuard cluster.
+Scatter plot (right)
+  • 1082 flows total. Orange = WireGuard. Grey = normal.
+  • Barely overlap.
+  • All 24 WG flows have bulk_fraction ≥ 0.32.
+  • Only 4 of 1058 normal flows are anywhere near the WG cluster.
 
-Orange note bottom-left, brief story on scientific honesty. Going in, I
-expected dominant_size_fraction — how concentrated the most common
-packet size is — to be the killer feature. The real data inverted that:
-the public dataset has lots of idle keepalive flows where every packet
-is identical, so they score higher than WireGuard does. We dropped that
-feature. The two that survived are the ones grounded in protocol
-mechanics, not intuition.""")
+Orange note (bottom-left) — scientific honesty
+  • I expected dominant_size_fraction to be the killer feature.
+  • Real data inverted it: public dataset has idle keepalive flows where every packet is identical.
+  • Those flows score HIGHER than WireGuard on that feature.
+  • We dropped it. Surviving features are grounded in protocol mechanics, not intuition.""")
 
     # ============================================================
     # Slide 7 — C2 classifier results
@@ -670,29 +675,21 @@ mechanics, not intuition.""")
                          PLOT_W, PLOT_H)
 
     _footer(s, 7, 0)
-    _notes(s, """Headline numbers, with definitions since some of these terms aren't
-universal.
+    _notes(s, """Headline numbers (with definitions)
+  • Accuracy 99.91% — overall fraction labeled correctly.
+  • Precision 1.000 — when we say "WireGuard," we're always right. Zero false alarms on 1058 normal flows.
+  • Recall 0.958 — we catch 23 of 24 actual WG flows. One slips through.
+  • ROC AUC 1.000 — single score from 0.5 (random) to 1.0 (perfect), across all sensitivity settings. We're at the ceiling.
 
-Accuracy 99.91% — overall fraction labeled correctly.
-Precision 1.000 — when we say "WireGuard," we're always right. Zero
-false alarms on 1058 normal flows.
-Recall 0.958 — we catch 23 of the 24 actual WireGuard flows. One slips
-through.
-ROC AUC 1.000 — a single number from 0.5 (random) to 1.0 (perfect)
-that scores the classifier across all sensitivity settings. We're at
-the ceiling.
+Adding more features doesn't help (small table)
+  • RF 8 features catches 1 FEWER WG flow than RF 2 features.
+  • Extra features added noise, not signal.
+  • LR = Logistic Regression, simpler model that draws a straight line between classes.
+  • LR catches everything but raises ~3% false alarms — real boundary isn't straight.
 
-Small table below: adding more features doesn't help. The 8-feature
-Random Forest catches one fewer WireGuard flow than the 2-feature
-version — extra features added noise, not signal. Logistic regression
-(LR), which is a simpler model that draws a straight line between the
-classes, catches everything but pays with 3% false alarms because the
-real boundary isn't straight.
-
-Right side. Confusion matrix on top — that's the 2x2 grid of correct
-and incorrect labels. Almost everything sits on the diagonal. ROC curve
-on the bottom hugs the top-left corner, which is the shape of a
-near-perfect classifier.""")
+Plots on the right
+  • Top = confusion matrix: 2x2 grid of correct vs incorrect labels. Almost everything on the diagonal.
+  • Bottom = ROC curve hugs the top-left corner. Shape of a near-perfect classifier.""")
 
     # ============================================================
     # Slide 8 — Related work and limitations
@@ -725,26 +722,24 @@ near-perfect classifier.""")
         "udp2raw v20230206.0 only. Later forks may behave differently.",
         "Static defenses: a delayed-ACK patch + WG MTU below the bulk threshold weakens C2.",
         "C1’s P3 (bogus ACK) is mildly hostile. Adversary should fire only at already-suspected hosts.",
-        "Not benchmarked against AmneziaWG, swgp-go, wstunnel. Future work.",
+        "Not benchmarked against AmneziaWG, a more popular obfuscator for WG, or swgp-go, wstunnel. Future work.",
     ], size=13, line_spacing=1.16, space_after=6)
 
     _footer(s, 8, 0)
-    _notes(s, """Lit positioning so the audience knows we read. The Xue group at
-Michigan has the dominant line. Their 2022 OpenVPN paper is our
-methodology template. Their 2024 paper detects nested TLS handshakes —
-doesn't fire on WireGuard because WireGuard doesn't use TLS. Their 2025
-NDSS paper uses cross-layer round-trip-time anomalies — attenuates on
-short UDP flows like ours. So those protocol-agnostic methods don't
-already solve the WireGuard-in-udp2raw case. Protocol-specific
-structural features remain the available approach.
+    _notes(s, """Lit positioning — Xue group at Michigan dominates this space
+  • 2022 OpenVPN paper → our methodology template.
+  • 2024 paper detects nested TLS handshakes → doesn't fire (WG has no TLS).
+  • 2025 NDSS uses cross-layer RTT anomalies → attenuates on our short UDP flows.
+  • → Protocol-agnostic methods don't solve our case. Protocol-specific structural features remain the approach.
 
-Right side, what we are NOT claiming. Single client and server, no
-ISP-scale data. One version of udp2raw — later forks may differ. Both
-attacks are defeatable by a maintainer who patches the tool — delayed
-ACK plus a smaller WireGuard MTU weakens C2. The bogus-ACK probe is
-mildly hostile, so an adversary would fire it only at already-suspected
-hosts. And we didn't compare against AmneziaWG, swgp-go, or wstunnel —
-future work.""")
+What we are NOT claiming
+  • Single client/server. No ISP-scale data.
+  • One version of udp2raw (v20230206.0). Later forks may differ.
+  • Defeatable by a maintainer:
+      – Delayed ACK + smaller WG MTU weakens C2.
+      – More conformant TCP emulation weakens C1.
+  • Bogus-ACK probe (P3) is mildly hostile → fire only at already-suspected hosts.
+  • Not benchmarked against AmneziaWG, a more popular obfuscator for WG, or swgp-go, wstunnel. Future work.""")
 
     # ============================================================
     # Slide 9 — Takeaways
@@ -777,25 +772,26 @@ future work.""")
               size=12, color=GREY)
 
     _footer(s, 9, 0)
-    _notes(s, """Four takeaways.
+    _notes(s, """1. WireGuard's wire format leaks
+  • Known result. Re-implemented as our baseline.
 
-One. WireGuard's wire format leaks. Known result; we re-implement it as
-our baseline.
+2. udp2raw doesn't fix it
+  • 8.5 s with the 5-packet prober (C1).
+  • 2 passive features, AUC = 1.0 (C2).
+  • Pick your weapon.
 
-Two. udp2raw doesn't actually fix it. 8.5 seconds with the five-packet
-prober, or two passive features at AUC 1.0. Pick your weapon.
+3. Not a statistical fluke — mechanical
+  • WG pads to MTU because that's its design.
+  • udp2raw acks 1:1 because that's how it wraps.
+  • udp2raw drops unfamiliar TCP shapes — parser was written for one shape.
+  • This is because udp2raw fakes TCP in userspace with a minimal parser to only handle the packet shapes it needs, everything else gets dropped.
+           
+4. Defenses are obvious
+  • Delayed ACK + smaller WG MTU kills C2.
+  • More conformant TCP emulation kills C1.
+  • Sketched in the paper, not patched upstream. Somebody else's PR.
 
-Three. Not a statistical fluke. WireGuard pads to MTU because that's
-its design. udp2raw acks 1:1 because that's how it wraps. udp2raw drops
-unfamiliar TCP shapes because its parser was written for one shape.
-Mechanical consequences, not accidents.
-
-Four. Defenses are obvious. Delayed ACK plus a smaller WireGuard MTU
-kills C2. More conformant TCP emulation kills C1. We sketch both in the
-paper but didn't patch the upstream tool. Somebody else's pull request
-to write.
-
-Happy to take questions. Live demo ready if there's interest.""")
+Happy to take questions. LIVE DEMO NEXT.""")
 
     # ============================================================
     # Patch footers with actual total
@@ -809,6 +805,14 @@ Happy to take questions. Live demo ready if there's interest.""")
                 if " / 0" in txt:
                     sh._element.getparent().remove(sh._element)
         _footer(s, i, total)
+
+    now = datetime.now(timezone.utc)
+    cp = prs.core_properties
+    cp.author = "Steven Schiavone"
+    cp.last_modified_by = "Steven Schiavone"
+    cp.title = "Two-Feature Detection of WireGuard-in-udp2raw"
+    cp.created = now
+    cp.modified = now
 
     prs.save(OUT)
     print(f"wrote {OUT}  ({total} slides)")

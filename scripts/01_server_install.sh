@@ -17,6 +17,7 @@ echo "[*] WAN: $WAN_IF   WG: $WG_PORT   udp2raw: TCP/$TCP_PORT"
 
 sudo dnf install -y oracle-epel-release-el9
 sudo dnf install -y wireguard-tools iptables-services curl tar
+rpm -q iptables-services >/dev/null || { echo "FATAL: iptables-services failed to install"; exit 1; }
 
 echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/99-wireguard.conf >/dev/null
 sudo sysctl --system >/dev/null
@@ -37,7 +38,7 @@ Address = ${WG_SERVER_IP}
 ListenPort = ${WG_PORT}
 PrivateKey = ${SERVER_PRIV}
 SaveConfig = false
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${WAN_IF} -j MASQUERADE
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${WAN_IF} -j MASQUERADE; iptables -C INPUT -p udp --dport ${WG_PORT} -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p udp --dport ${WG_PORT} -j ACCEPT; iptables -C INPUT -p tcp --dport ${TCP_PORT} -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport ${TCP_PORT} -j ACCEPT; iptables -t raw -C PREROUTING -p tcp --dport ${TCP_PORT} -j NOTRACK 2>/dev/null || iptables -t raw -I PREROUTING -p tcp --dport ${TCP_PORT} -j NOTRACK; iptables -t raw -C OUTPUT -p tcp --sport ${TCP_PORT} -j NOTRACK 2>/dev/null || iptables -t raw -I OUTPUT -p tcp --sport ${TCP_PORT} -j NOTRACK
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${WAN_IF} -j MASQUERADE
 EOF
 sudo chmod 600 /etc/wireguard/wg0.conf
@@ -55,7 +56,8 @@ sudo iptables -t raw -C PREROUTING -p tcp --dport ${TCP_PORT} -j NOTRACK 2>/dev/
   || sudo iptables -t raw -I PREROUTING -p tcp --dport ${TCP_PORT} -j NOTRACK
 sudo iptables -t raw -C OUTPUT -p tcp --sport ${TCP_PORT} -j NOTRACK 2>/dev/null \
   || sudo iptables -t raw -I OUTPUT -p tcp --sport ${TCP_PORT} -j NOTRACK
-sudo bash -c 'iptables-save > /etc/sysconfig/iptables' || true
+sudo bash -c 'iptables-save > /etc/sysconfig/iptables'
+sudo systemctl enable --now iptables
 
 if ! command -v udp2raw >/dev/null 2>&1; then
   TMP="$(mktemp -d)"

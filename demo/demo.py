@@ -261,21 +261,19 @@ def scene1(live: Live):
 
     # Now bring up the tunnel inside the capture window
     run_streamed(["wg-quick", "up", "wg-direct"], live, max_seconds=10)
+    time.sleep(2)  # let handshake + route settle before driving traffic
 
-    # Generate inner traffic during the remaining capture window
-    for i in range(12):
+    # Drive MTU-sized inner traffic so the pcap has real WG transport packets
+    # (not just handshakes + keepalives). 12 pings × 1372 B payload = 24
+    # length-1440 WG transport packets, bulk_fraction ~0.89.
+    bulk_pinger = subprocess.Popen(
+        ["ping", "-c", "12", "-i", "0.3", "-s", "1372", "10.66.66.1"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(8):
         live.update(render_layout(), refresh=True)
-        if i == 1:
-            subprocess.Popen(
-                ["ping", "-c", "8", "-W", "1", "10.66.66.1"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if i == 2:
-            subprocess.Popen(
-                ["curl", "-s", "--max-time", "8",
-                 "https://api.ipify.org"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(1)
-    cap.wait(timeout=2)
+    bulk_pinger.wait(timeout=2)
+    cap.wait(timeout=4)
 
     # Classify
     SCENE.append_cmd(f"$ python3 wg_dpi.py -r {pcap.name} --no-evidence",
@@ -355,14 +353,19 @@ def scene2(live: Live):
         ["timeout", "14", "tcpdump", "-i", IFACE, "-w", str(pcap),
          f"port {TCP_PORT}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for i in range(14):
+    time.sleep(1)  # let tcpdump bind
+
+    # Drive MTU-sized inner traffic. wg-obfuscated MTU is 1200, so 1172B
+    # inner ICMP -> ~1248B WG transport -> framed by udp2raw into ~1248B
+    # TCP segments. That's the "bulk" population the classifier expects.
+    bulk_pinger = subprocess.Popen(
+        ["ping", "-c", "12", "-i", "0.3", "-s", "1172", "10.66.66.1"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(11):
         live.update(render_layout(), refresh=True)
-        if i == 1:
-            subprocess.Popen(
-                ["ping", "-c", "10", "-W", "1", "10.66.66.1"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(1)
-    cap.wait(timeout=2)
+    bulk_pinger.wait(timeout=2)
+    cap.wait(timeout=4)
 
     SCENE.append_cmd(f"$ python3 wg_dpi.py -r {pcap.name} --no-evidence",
                      style="bold white")
